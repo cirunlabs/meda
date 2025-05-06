@@ -239,7 +239,7 @@ fi
         );
         
         if ping_result.is_ok() && ping_result.unwrap().status.success() {
-            info!("VM {} is now running", name);
+            info!("VM {} is now running at {}", name, vm_ip);
             return Ok(());
         }
         
@@ -252,7 +252,7 @@ fi
     }
     
     if check_vm_running(config, name)? {
-        info!("VM appears to be running but not responding to ping yet");
+        info!("VM {} appears to be running but not responding to ping yet", name);
         println!("\nWhen ready: ssh ubuntu@{}", vm_ip);
         Ok(())
     } else {
