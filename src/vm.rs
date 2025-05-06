@@ -1,6 +1,6 @@
 use crate::config::Config;
 use crate::error::{Error, Result};
-use crate::network::{generate_random_mac, generate_random_octet, setup_networking, cleanup_networking};
+use crate::network::{generate_random_mac, setup_networking, cleanup_networking};
 use crate::util::{check_process_running, download_file, ensure_dependency, run_command, run_command_with_output, write_string_to_file};
 use log::info;
 use std::fs;
@@ -209,7 +209,7 @@ fi
     
     // Start the VM
     info!("Booting VM {}", name);
-    run_command(start_script_path.to_str().unwrap(), &[])?;
+    run_command("bash", &[start_script_path.to_str().unwrap()])?;
     
     // Wait for VM to boot
     info!("Waiting for VM to boot");
@@ -349,7 +349,7 @@ pub async fn start(config: &Config, name: &str) -> Result<()> {
     let start_script = vm_dir.join("start.sh");
     
     if start_script.exists() {
-        run_command(start_script.to_str().unwrap(), &[])?;
+        run_command("bash", &[start_script.to_str().unwrap()])?;
     } else {
         return Err(Error::Other(format!("Start script for VM {} is missing", name)));
     }
@@ -468,19 +468,18 @@ pub fn check_vm_running(config: &Config, name: &str) -> Result<bool> {
     let pid_file = vm_dir.join("pid");
     let api_sock = vm_dir.join("api.sock");
     
+    // First check if the VM directory exists
+    if !vm_dir.exists() {
+        return Ok(false);
+    }
+    
     // Check if we have a PID file and the process is running
     if pid_file.exists() {
         if let Ok(pid_str) = fs::read_to_string(&pid_file) {
             if let Ok(pid) = pid_str.trim().parse::<u32>() {
                 if check_process_running(pid) {
                     // Process exists
-                    if api_sock.exists() {
-                        // Socket exists and process is running
-                        return Ok(true);
-                    } else {
-                        // Process exists but socket is missing
-                        return Ok(true);
-                    }
+                    return Ok(true);
                 } else {
                     // Process doesn't exist, clean up stale files
                     fs::remove_file(&api_sock).ok();
@@ -489,35 +488,34 @@ pub fn check_vm_running(config: &Config, name: &str) -> Result<bool> {
                 }
             }
         }
-    } else if api_sock.exists() {
-        // Socket exists but no PID file
-        // Try to find the cloud-hypervisor process that's using this socket
-        let ch_bin_str = config.ch_bin.to_str().unwrap();
-        let api_sock_str = api_sock.to_str().unwrap();
-        
-        let output = run_command_with_output(
-            "ps", 
-            &["aux"]
-        )?;
-        
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        
-        for line in stdout.lines() {
-            if line.contains(ch_bin_str) && line.contains(api_sock_str) && !line.contains("grep") {
-                let parts: Vec<&str> = line.split_whitespace().collect();
-                if parts.len() >= 2 {
-                    if let Ok(pid) = parts[1].parse::<u32>() {
-                        // Found running process, create pid file
-                        fs::write(&pid_file, pid.to_string())?;
-                        return Ok(true);
-                    }
+    }
+    
+    // If we get here, either there's no PID file or it couldn't be parsed
+    // Try to find the cloud-hypervisor process by looking for the VM name in the process list
+    let output = run_command_with_output(
+        "ps", 
+        &["aux"]
+    )?;
+    
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let vm_path = vm_dir.to_string_lossy();
+    
+    for line in stdout.lines() {
+        if line.contains("cloud-hypervisor") && line.contains(&vm_path) && !line.contains("grep") {
+            let parts: Vec<&str> = line.split_whitespace().collect();
+            if parts.len() >= 2 {
+                if let Ok(pid) = parts[1].parse::<u32>() {
+                    // Found running process, create pid file
+                    fs::write(&pid_file, pid.to_string())?;
+                    return Ok(true);
                 }
             }
         }
-        
-        // Socket exists but no process using it, clean up
+    }
+    
+    // If the socket exists but we couldn't find a process, clean it up
+    if api_sock.exists() {
         fs::remove_file(&api_sock).ok();
-        return Ok(false);
     }
     
     Ok(false)
