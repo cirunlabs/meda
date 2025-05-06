@@ -84,16 +84,6 @@ pub fn check_process_running(pid: u32) -> bool {
     }
 }
 
-pub fn read_file_to_string(path: &Path) -> Result<String> {
-    fs::read_to_string(path).map_err(|e| {
-        if e.kind() == std::io::ErrorKind::NotFound {
-            Error::FileNotFound(path.to_path_buf())
-        } else {
-            Error::Io(e)
-        }
-    })
-}
-
 pub fn write_string_to_file(path: &Path, content: &str) -> Result<()> {
     fs::write(path, content).map_err(|e| Error::Io(e))
 }
