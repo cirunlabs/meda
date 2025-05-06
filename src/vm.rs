@@ -89,7 +89,7 @@ pub async fn create(config: &Config, name: &str, user_data_path: Option<&str>) -
     }
     
     // Generate network config with a unique subnet
-    let subnet = network::generate_unique_subnet(config).await?;
+    let subnet = crate::network::generate_unique_subnet(config).await?;
     let tap_name = format!("tap-{}", name);
     
     // Store network config
@@ -365,7 +365,7 @@ pub async fn start(config: &Config, name: &str) -> Result<()> {
         );
         
         if ping_result.is_ok() && ping_result.unwrap().status.success() {
-            info!("VM {} is now running", name);
+            info!("VM {} is now running at {}", name, vm_ip);
             println!("\nVM {} → ssh ubuntu@{}", name, vm_ip);
             return Ok(());
         }
