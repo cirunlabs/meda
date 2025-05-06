@@ -498,7 +498,7 @@ pub fn check_vm_running(config: &Config, name: &str) -> Result<bool> {
     )?;
     
     let stdout = String::from_utf8_lossy(&output.stdout);
-    let vm_path = vm_dir.to_string_lossy();
+    let vm_path = vm_dir.to_string_lossy().to_string();
     
     for line in stdout.lines() {
         if line.contains("cloud-hypervisor") && line.contains(&vm_path) && !line.contains("grep") {
