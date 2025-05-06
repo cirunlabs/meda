@@ -21,6 +21,49 @@ pub fn generate_random_octet() -> u8 {
     16 + rng.gen::<u8>() % 200
 }
 
+pub async fn generate_unique_subnet(config: &Config) -> Result<String> {
+    // Get all existing subnets
+    let mut used_subnets = Vec::new();
+    
+    if let Ok(entries) = fs::read_dir(&config.vm_root) {
+        for entry in entries {
+            if let Ok(entry) = entry {
+                let path = entry.path();
+                if path.is_dir() {
+                    let subnet_file = path.join("subnet");
+                    if subnet_file.exists() {
+                        if let Ok(subnet) = fs::read_to_string(subnet_file) {
+                            let subnet = subnet.trim();
+                            if subnet.starts_with("192.168.") {
+                                if let Some(octet_str) = subnet.strip_prefix("192.168.") {
+                                    if let Ok(octet) = octet_str.parse::<u8>() {
+                                        used_subnets.push(octet);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    
+    // Generate a unique subnet
+    let mut attempts = 0;
+    let max_attempts = 200; // Avoid infinite loop
+    
+    while attempts < max_attempts {
+        let octet = generate_random_octet();
+        if !used_subnets.contains(&octet) {
+            return Ok(format!("192.168.{}", octet));
+        }
+        attempts += 1;
+    }
+    
+    // If we've tried too many times, return an error
+    Err(Error::Other("Could not generate a unique subnet after multiple attempts".to_string()))
+}
+
 pub async fn setup_networking(_config: &Config, name: &str, tap_name: &str, subnet: &str) -> Result<()> {
     debug!("Setting up networking for VM {}", name);
     

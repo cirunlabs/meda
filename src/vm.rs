@@ -88,9 +88,8 @@ pub async fn create(config: &Config, name: &str, user_data_path: Option<&str>) -
         )?;
     }
     
-    // Generate network config
-    let octet = generate_random_octet();
-    let subnet = format!("192.168.{}", octet);
+    // Generate network config with a unique subnet
+    let subnet = network::generate_unique_subnet(config).await?;
     let tap_name = format!("tap-{}", name);
     
     // Store network config
