@@ -4,7 +4,6 @@ use crate::util::{run_command, run_command_with_output};
 use log::{debug, info};
 use rand::Rng;
 use std::fs;
-use std::path::Path;
 
 pub fn generate_random_mac() -> String {
     let mut rng = rand::thread_rng();
@@ -22,7 +21,7 @@ pub fn generate_random_octet() -> u8 {
     16 + rng.gen::<u8>() % 200
 }
 
-pub async fn setup_networking(config: &Config, name: &str, tap_name: &str, subnet: &str) -> Result<()> {
+pub async fn setup_networking(_config: &Config, name: &str, tap_name: &str, subnet: &str) -> Result<()> {
     debug!("Setting up networking for VM {}", name);
     
     // Check if tap device exists

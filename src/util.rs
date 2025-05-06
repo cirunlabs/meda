@@ -1,9 +1,8 @@
 use crate::error::{Error, Result};
-use log::{debug, error};
+use log::debug;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::{Command, Output};
-use tokio::process::Command as TokioCommand;
 
 pub fn run_command(program: &str, args: &[&str]) -> Result<()> {
     debug!("Running command: {} {}", program, args.join(" "));

@@ -1,6 +1,6 @@
 use crate::error::{Error, Result};
 use std::env;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 pub struct Config {
     pub ch_home: PathBuf,

@@ -1,15 +1,14 @@
 use crate::config::Config;
 use crate::error::{Error, Result};
 use crate::network::{generate_random_mac, generate_random_octet, setup_networking, cleanup_networking};
-use crate::util::{check_dependency, check_process_running, download_file, ensure_dependency, run_command, run_command_with_output, read_file_to_string, write_string_to_file};
-use log::{debug, info, warn};
-use std::fs::{self, File};
+use crate::util::{check_process_running, download_file, ensure_dependency, run_command, run_command_with_output, write_string_to_file};
+use log::info;
+use std::fs;
 use std::io::Write;
-use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::thread;
 use std::time::Duration;
-use tokio::time;
+use std::os::unix::fs::PermissionsExt;
 
 pub async fn bootstrap(config: &Config) -> Result<()> {
     config.ensure_dirs()?;
@@ -268,8 +267,8 @@ pub async fn list(config: &Config) -> Result<()> {
         if path.is_dir() {
             let name = path.file_name().unwrap().to_string_lossy().to_string();
             let mut state = "stopped";
-            let mut ip = "-";
-            let mut fwd = "-";
+            let mut ip = "-".to_string();
+            let mut fwd = "-".to_string();
             
             if check_vm_running(config, &name)? {
                 state = "running";
