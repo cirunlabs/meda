@@ -16,6 +16,10 @@ pub enum Commands {
         
         /// Path to user-data file (optional)
         user_data: Option<String>,
+        
+        /// Force create (delete if exists)
+        #[arg(short, long)]
+        force: bool,
     },
     
     /// List all VMs

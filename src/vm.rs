@@ -11,6 +11,8 @@ use std::time::Duration;
 use std::os::unix::fs::PermissionsExt;
 
 pub async fn bootstrap(config: &Config) -> Result<()> {
+    info!("Bootstrapping environment");
+    info!("Ensuring directories exist");
     config.ensure_dirs()?;
     
     // Download base image if needed
@@ -62,7 +64,10 @@ pub async fn bootstrap(config: &Config) -> Result<()> {
 pub async fn create(config: &Config, name: &str, user_data_path: Option<&str>) -> Result<()> {
     let vm_dir = config.vm_dir(name);
     
+    info!("Attempting to create VM: {}", name);
+    
     if vm_dir.exists() {
+        info!("VM directory already exists at: {}", vm_dir.display());
         return Err(Error::VmAlreadyExists(name.to_string()));
     }
     
@@ -459,7 +464,7 @@ pub async fn delete(config: &Config, name: &str) -> Result<()> {
     Ok(())
 }
 
-fn check_vm_running(config: &Config, name: &str) -> Result<bool> {
+pub fn check_vm_running(config: &Config, name: &str) -> Result<bool> {
     let vm_dir = config.vm_dir(name);
     let pid_file = vm_dir.join("pid");
     let api_sock = vm_dir.join("api.sock");

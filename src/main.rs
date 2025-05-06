@@ -13,15 +13,30 @@ use log::info;
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    // Initialize logger with more verbose output
+    std::env::set_var("RUST_LOG", "info");
     env_logger::init();
     
     let cli = Cli::parse();
     let config = Config::new()?;
     
     info!("Meda - Cloud-Hypervisor VM Manager");
+    info!("Working with VMs in: {}", config.vm_root.display());
     
     match cli.command {
-        Commands::Create { name, user_data } => {
+        Commands::Create { name, user_data, force } => {
+            if force {
+                info!("Force flag set, removing existing VM if present");
+                let vm_dir = config.vm_dir(&name);
+                if vm_dir.exists() {
+                    if vm::check_vm_running(&config, &name)? {
+                        info!("Stopping existing VM: {}", name);
+                        vm::stop(&config, &name).await?;
+                    }
+                    info!("Deleting existing VM: {}", name);
+                    vm::delete(&config, &name).await?;
+                }
+            }
             vm::create(&config, &name, user_data.as_deref()).await?;
         }
         Commands::List => {
