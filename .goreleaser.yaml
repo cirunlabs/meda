@@ -1,23 +1,17 @@
-# This is an example .goreleaser.yml file with some sensible defaults.
-# Make sure to check the documentation at https://goreleaser.com
-
-# The lines below are called `modelines`. See `:help modeline`
-# Feel free to remove those if you don't want/need to use them.
-# yaml-language-server: $schema=https://goreleaser.com/static/schema.json
-# vim: set ts=2 sw=2 tw=0 fo=cnqoj
-
+# GoReleaser configuration for Rust project
+# Documentation at https://goreleaser.com
 version: 2
 
 before:
   hooks:
-    # if you don't do these things before calling goreleaser, it might be a
-    # good idea to do them here:
     - rustup default stable
-    - cargo install --locked cargo-zigbuild
     - cargo fetch --locked
 
 builds:
   - builder: rust
+    binary: ch-vm
+    env:
+      - CARGO_TERM_COLOR=always
     flags:
       - --release
     targets:
@@ -28,7 +22,7 @@ builds:
       - aarch64-apple-darwin
 
 archives:
-  - formats: [tar.gz]
+  - format: tar.gz
     # this name template makes the OS and Arch compatible with the results of `uname`.
     name_template: >-
       {{ .ProjectName }}_
@@ -39,7 +33,11 @@ archives:
     # use zip for windows archives
     format_overrides:
       - goos: windows
-        formats: [zip]
+        format: zip
+    files:
+      - README.md
+      - LICENSE*
+      - ch-vm.sh
 
 changelog:
   sort: asc
@@ -47,10 +45,14 @@ changelog:
     exclude:
       - "^docs:"
       - "^test:"
+      - "^ci:"
+      - Merge pull request
+      - Merge branch
 
 release:
+  github:
+    owner: "{{ .Env.GITHUB_REPOSITORY_OWNER }}"
+    name: "{{ .Env.GITHUB_REPOSITORY }}"
   footer: >-
-
     ---
-
     Released by [GoReleaser](https://github.com/goreleaser/goreleaser).

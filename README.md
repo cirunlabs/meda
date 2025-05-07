@@ -11,6 +11,12 @@ A Rust-based CLI tool for managing Cloud-Hypervisor micro-VMs.
 
 ## Installation
 
+### From Releases
+
+Download the latest release from the [Releases page](https://github.com/yourusername/ch-vm/releases).
+
+### From Source
+
 ```bash
 cargo install --path .
 ```
