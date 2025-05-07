@@ -51,8 +51,8 @@ changelog:
 
 release:
   github:
-    owner: "{{ .Env.GITHUB_REPOSITORY_OWNER }}"
-    name: "{{ .Env.GITHUB_REPOSITORY }}"
+    owner: "aktech"
+    name: "chvisor-example"
   footer: >-
     ---
     Released by [GoReleaser](https://github.com/goreleaser/goreleaser).
