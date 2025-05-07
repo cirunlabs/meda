@@ -5,8 +5,8 @@ version: 2
 before:
   hooks:
     - rustup default stable
-    - cargo install --locked cargo-zigbuild
-    - cargo fetch --locked
+    - cargo install cargo-zigbuild
+    - cargo fetch
 
 # Actually builds the binaries.
 builds:
