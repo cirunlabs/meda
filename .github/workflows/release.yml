@@ -3,8 +3,9 @@ name: goreleaser
 on:
   push:
     # run only against tags
-    tags:
-      - "*"
+    # TODO: Uncomment this when testing is done
+    # tags:
+      # - "*"
 
 permissions:
   contents: write
@@ -20,6 +21,9 @@ jobs:
         with:
           fetch-depth: 0
       - uses: mlugg/setup-zig@v1
+      - name: Install openssl
+        run: |
+          sudo apt-get install pkg-config libssl-dev
       - uses: sigstore/cosign-installer@v3.8.2
       - uses: anchore/sbom-action/download-syft@v0.19.0
       - uses: docker/setup-qemu-action@v3
