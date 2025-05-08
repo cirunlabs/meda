@@ -20,14 +20,6 @@ pub struct VmInfo {
 }
 
 #[derive(Serialize)]
-pub struct VmInfo {
-    pub name: String,
-    pub state: String,
-    pub ip: String,
-    pub ports: String,
-}
-
-#[derive(Serialize)]
 pub struct VmResult {
     pub success: bool,
     pub message: String,
