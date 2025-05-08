@@ -14,7 +14,7 @@ use log::info;
 #[tokio::main]
 async fn main() -> Result<()> {
     // Initialize logger with more verbose output
-    std::env::set_var("RUST_LOG", "info");
+    // std::env::set_var("RUST_LOG", "info");
     env_logger::init();
     
     let cli = Cli::parse();
