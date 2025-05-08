@@ -11,7 +11,7 @@ before:
 # Actually builds the binaries.
 builds:
   - builder: rust
-    binary: ch-vm
+    binary: meda
     env:
       - CARGO_TERM_COLOR=always
     flags:
