@@ -20,8 +20,11 @@ pub struct VmInfo {
 }
 
 #[derive(Serialize)]
-pub struct VmList {
-    pub vms: Vec<VmInfo>,
+pub struct VmInfo {
+    pub name: String,
+    pub state: String,
+    pub ip: String,
+    pub ports: String,
 }
 
 #[derive(Serialize)]
@@ -300,7 +303,7 @@ fi
 pub async fn list(config: &Config, json_output: bool) -> Result<()> {
     bootstrap(config).await?;
     
-    let mut vm_list = VmList { vms: Vec::new() };
+    let mut vm_list: Vec<VmInfo> = Vec::new();
     
     if !json_output {
         println!("{:<18} {:<8} {:<15} {:<10}", "NAME", "STATE", "IP", "PORTS");
@@ -329,7 +332,7 @@ pub async fn list(config: &Config, json_output: bool) -> Result<()> {
             }
             
             if json_output {
-                vm_list.vms.push(VmInfo {
+                vm_list.push(VmInfo {
                     name: name.clone(),
                     state: state.to_string(),
                     ip: ip.clone(),
