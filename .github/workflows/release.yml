@@ -14,23 +14,38 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0
+          fetch-depth: 0       # get full history & tags
+
       - uses: mlugg/setup-zig@v1
       - name: Install openssl
-        run: |
-          sudo apt-get install pkg-config libssl-dev
+        run: sudo apt-get install pkg-config libssl-dev
       - uses: sigstore/cosign-installer@v3.8.2
       - uses: anchore/sbom-action/download-syft@v0.19.0
       - uses: docker/setup-qemu-action@v3
       - uses: docker/setup-buildx-action@v3
+
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
           go-version: stable
-      - name: Run GoReleaser
+
+      # ---------------------------------------------------------------
+      # 1) Always build in snapshot mode to test cross-compiles
+      # ---------------------------------------------------------------
+      - name: GoReleaser (snapshot)
+        if: ${{ ! startsWith(github.ref, 'refs/tags/') }}
         uses: goreleaser/goreleaser-action@v6
         with:
-          distribution: goreleaser
+          version: "~> v2"
+          args: release --clean --snapshot
+
+      # ---------------------------------------------------------------
+      # 2) On a tag push, do the real release
+      # ---------------------------------------------------------------
+      - name: GoReleaser (release)
+        if: ${{ startsWith(github.ref, 'refs/tags/') }}
+        uses: goreleaser/goreleaser-action@v6
+        with:
           version: "~> v2"
           args: release --clean
         env:
