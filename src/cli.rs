@@ -3,6 +3,10 @@ use clap::{Parser, Subcommand};
 #[derive(Parser)]
 #[command(author, version, about = "Cloud-Hypervisor VM Manager", long_about = None)]
 pub struct Cli {
+    /// Output in JSON format
+    #[arg(long, global = true)]
+    pub json: bool,
+    
     #[command(subcommand)]
     pub command: Commands,
 }

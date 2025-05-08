@@ -26,36 +26,59 @@ async fn main() -> Result<()> {
     match cli.command {
         Commands::Create { name, user_data, force } => {
             if force {
-                info!("Force flag set, removing existing VM if present");
+                if !cli.json {
+                    info!("Force flag set, removing existing VM if present");
+                }
                 let vm_dir = config.vm_dir(&name);
                 if vm_dir.exists() {
                     if vm::check_vm_running(&config, &name)? {
-                        info!("Stopping existing VM: {}", name);
-                        vm::stop(&config, &name).await?;
+                        if !cli.json {
+                            info!("Stopping existing VM: {}", name);
+                        }
+                        vm::stop(&config, &name, cli.json).await?;
                     }
-                    info!("Deleting existing VM: {}", name);
-                    vm::delete(&config, &name).await?;
+                    if !cli.json {
+                        info!("Deleting existing VM: {}", name);
+                    }
+                    vm::delete(&config, &name, cli.json).await?;
                 }
             }
-            vm::create(&config, &name, user_data.as_deref()).await?;
+            vm::create(&config, &name, user_data.as_deref(), cli.json).await?;
         }
         Commands::List => {
-            vm::list(&config).await?;
+            vm::list(&config, cli.json).await?;
         }
         Commands::Get { name } => {
-            vm::get(&config, &name).await?;
+            vm::get(&config, &name, cli.json).await?;
         }
         Commands::Start { name } => {
-            vm::start(&config, &name).await?;
+            vm::start(&config, &name, cli.json).await?;
         }
         Commands::Stop { name } => {
-            vm::stop(&config, &name).await?;
+            vm::stop(&config, &name, cli.json).await?;
         }
         Commands::Delete { name } => {
-            vm::delete(&config, &name).await?;
+            vm::delete(&config, &name, cli.json).await?;
         }
         Commands::PortForward { name, host_port, guest_port } => {
-            network::port_forward(&config, &name, host_port, guest_port).await?;
+            let result = network::port_forward(&config, &name, host_port, guest_port).await;
+            if cli.json {
+                if result.is_ok() {
+                    let json_result = vm::VmResult {
+                        success: true,
+                        message: format!("Port forwarding set up: {} -> {}", host_port, guest_port),
+                    };
+                    println!("{}", serde_json::to_string_pretty(&json_result)?);
+                } else if let Err(e) = result {
+                    let json_result = vm::VmResult {
+                        success: false,
+                        message: format!("Error: {}", e),
+                    };
+                    println!("{}", serde_json::to_string_pretty(&json_result)?);
+                }
+            } else {
+                result?;
+            }
         }
     }
     

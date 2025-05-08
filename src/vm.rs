@@ -3,12 +3,40 @@ use crate::error::{Error, Result};
 use crate::network::{generate_random_mac, setup_networking, cleanup_networking};
 use crate::util::{check_process_running, download_file, ensure_dependency, run_command, run_command_with_output, write_string_to_file};
 use log::info;
+use serde::Serialize;
 use std::fs;
 use std::io::Write;
 use std::process::Command;
 use std::thread;
 use std::time::Duration;
 use std::os::unix::fs::PermissionsExt;
+
+#[derive(Serialize)]
+pub struct VmInfo {
+    pub name: String,
+    pub state: String,
+    pub ip: String,
+    pub ports: String,
+}
+
+#[derive(Serialize)]
+pub struct VmList {
+    pub vms: Vec<VmInfo>,
+}
+
+#[derive(Serialize)]
+pub struct VmResult {
+    pub success: bool,
+    pub message: String,
+}
+
+#[derive(Serialize)]
+pub struct VmDetailedInfo {
+    pub name: String,
+    pub state: String,
+    pub ip: Option<String>,
+    pub details: Option<serde_json::Value>,
+}
 
 pub async fn bootstrap(config: &Config) -> Result<()> {
     info!("Bootstrapping environment");
@@ -61,10 +89,12 @@ pub async fn bootstrap(config: &Config) -> Result<()> {
     Ok(())
 }
 
-pub async fn create(config: &Config, name: &str, user_data_path: Option<&str>) -> Result<()> {
+pub async fn create(config: &Config, name: &str, user_data_path: Option<&str>, json_output: bool) -> Result<()> {
     let vm_dir = config.vm_dir(name);
     
-    info!("Attempting to create VM: {}", name);
+    if !json_output {
+        info!("Attempting to create VM: {}", name);
+    }
     
     if vm_dir.exists() {
         info!("VM directory already exists at: {}", vm_dir.display());
@@ -251,18 +281,30 @@ fi
     }
     
     if check_vm_running(config, name)? {
-        info!("VM {} appears to be running but not responding to ping yet", name);
-        println!("\nWhen ready: ssh ubuntu@{}", vm_ip);
+        if json_output {
+            let result = VmResult {
+                success: true,
+                message: format!("VM {} created and started at {}", name, vm_ip),
+            };
+            println!("{}", serde_json::to_string_pretty(&result)?);
+        } else {
+            info!("VM {} appears to be running but not responding to ping yet", name);
+            println!("\nWhen ready: ssh ubuntu@{}", vm_ip);
+        }
         Ok(())
     } else {
         Err(Error::VmStartFailed("VM failed to start properly".to_string()))
     }
 }
 
-pub async fn list(config: &Config) -> Result<()> {
+pub async fn list(config: &Config, json_output: bool) -> Result<()> {
     bootstrap(config).await?;
     
-    println!("{:<18} {:<8} {:<15} {:<10}", "NAME", "STATE", "IP", "PORTS");
+    let mut vm_list = VmList { vms: Vec::new() };
+    
+    if !json_output {
+        println!("{:<18} {:<8} {:<15} {:<10}", "NAME", "STATE", "IP", "PORTS");
+    }
     
     for entry in fs::read_dir(&config.vm_root)? {
         let entry = entry?;
@@ -286,22 +328,45 @@ pub async fn list(config: &Config) -> Result<()> {
                 }
             }
             
-            println!("{:<18} {:<8} {:<15} {:<10}", name, state, ip, fwd);
+            if json_output {
+                vm_list.vms.push(VmInfo {
+                    name: name.clone(),
+                    state: state.to_string(),
+                    ip: ip.clone(),
+                    ports: fwd.clone(),
+                });
+            } else {
+                println!("{:<18} {:<8} {:<15} {:<10}", name, state, ip, fwd);
+            }
         }
+    }
+    
+    if json_output {
+        println!("{}", serde_json::to_string_pretty(&vm_list)?);
     }
     
     Ok(())
 }
 
-pub async fn get(config: &Config, name: &str) -> Result<()> {
+pub async fn get(config: &Config, name: &str, json_output: bool) -> Result<()> {
     let vm_dir = config.vm_dir(name);
     
     if !vm_dir.exists() {
         return Err(Error::VmNotFound(name.to_string()));
     }
     
-    if check_vm_running(config, name)? {
-        info!("VM {} is running", name);
+    let is_running = check_vm_running(config, name)?;
+    let mut vm_info = VmDetailedInfo {
+        name: name.to_string(),
+        state: if is_running { "running" } else { "stopped" }.to_string(),
+        ip: None,
+        details: None,
+    };
+    
+    if is_running {
+        if !json_output {
+            info!("VM {} is running", name);
+        }
         
         let output = run_command_with_output(
             config.cr_bin.to_str().unwrap(),
@@ -310,20 +375,39 @@ pub async fn get(config: &Config, name: &str) -> Result<()> {
         
         let stdout = String::from_utf8_lossy(&output.stdout);
         let parsed = serde_json::from_str::<serde_json::Value>(&stdout)?;
-        println!("{}", serde_json::to_string_pretty(&parsed)?);
-    } else {
-        info!("VM {} is not running", name);
         
-        if let Ok(subnet) = fs::read_to_string(vm_dir.join("subnet")) {
-            println!("\nTo start VM: meda start {}", name);
-            println!("When running: ssh ubuntu@{}.2\n", subnet.trim());
+        if json_output {
+            vm_info.details = Some(parsed);
+            
+            if let Ok(subnet) = fs::read_to_string(vm_dir.join("subnet")) {
+                vm_info.ip = Some(format!("{}.2", subnet.trim()));
+            }
+            
+            println!("{}", serde_json::to_string_pretty(&vm_info)?);
+        } else {
+            println!("{}", serde_json::to_string_pretty(&parsed)?);
+        }
+    } else {
+        if !json_output {
+            info!("VM {} is not running", name);
+            
+            if let Ok(subnet) = fs::read_to_string(vm_dir.join("subnet")) {
+                println!("\nTo start VM: meda start {}", name);
+                println!("When running: ssh ubuntu@{}.2\n", subnet.trim());
+            }
+        } else {
+            if let Ok(subnet) = fs::read_to_string(vm_dir.join("subnet")) {
+                vm_info.ip = Some(format!("{}.2", subnet.trim()));
+            }
+            
+            println!("{}", serde_json::to_string_pretty(&vm_info)?);
         }
     }
     
     Ok(())
 }
 
-pub async fn start(config: &Config, name: &str) -> Result<()> {
+pub async fn start(config: &Config, name: &str, json_output: bool) -> Result<()> {
     let vm_dir = config.vm_dir(name);
     
     if !vm_dir.exists() {
@@ -331,7 +415,15 @@ pub async fn start(config: &Config, name: &str) -> Result<()> {
     }
     
     if check_vm_running(config, name)? {
-        info!("VM {} is already running", name);
+        if json_output {
+            let result = VmResult {
+                success: true,
+                message: format!("VM {} is already running", name),
+            };
+            println!("{}", serde_json::to_string_pretty(&result)?);
+        } else {
+            info!("VM {} is already running", name);
+        }
         return Ok(());
     }
     
@@ -365,22 +457,38 @@ pub async fn start(config: &Config, name: &str) -> Result<()> {
         );
         
         if ping_result.is_ok() && ping_result.unwrap().status.success() {
-            info!("VM {} is now running at {}", name, vm_ip);
-            println!("\nVM {} → ssh ubuntu@{}", name, vm_ip);
+            if json_output {
+                let result = VmResult {
+                    success: true,
+                    message: format!("VM {} is now running at {}", name, vm_ip),
+                };
+                println!("{}", serde_json::to_string_pretty(&result)?);
+            } else {
+                info!("VM {} is now running at {}", name, vm_ip);
+                println!("\nVM {} → ssh ubuntu@{}", name, vm_ip);
+            }
             return Ok(());
         }
         
         thread::sleep(Duration::from_secs(1));
     }
     
-    info!("VM may still be booting. Check status with 'meda list'");
-    println!("\nVM {} → ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null ubuntu@{}", name, vm_ip);
-    println!("Password authentication is enabled with password: ubuntu");
+    if json_output {
+        let result = VmResult {
+            success: true,
+            message: format!("VM {} is starting at {}", name, vm_ip),
+        };
+        println!("{}", serde_json::to_string_pretty(&result)?);
+    } else {
+        info!("VM may still be booting. Check status with 'meda list'");
+        println!("\nVM {} → ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null ubuntu@{}", name, vm_ip);
+        println!("Password authentication is enabled with password: ubuntu");
+    }
     
     Ok(())
 }
 
-pub async fn stop(config: &Config, name: &str) -> Result<()> {
+pub async fn stop(config: &Config, name: &str, json_output: bool) -> Result<()> {
     let vm_dir = config.vm_dir(name);
     
     if !vm_dir.exists() {
@@ -388,7 +496,15 @@ pub async fn stop(config: &Config, name: &str) -> Result<()> {
     }
     
     if !check_vm_running(config, name)? {
-        info!("VM {} is not running", name);
+        if json_output {
+            let result = VmResult {
+                success: true,
+                message: format!("VM {} is not running", name),
+            };
+            println!("{}", serde_json::to_string_pretty(&result)?);
+        } else {
+            info!("VM {} is not running", name);
+        }
         return Ok(());
     }
     
@@ -405,7 +521,15 @@ pub async fn stop(config: &Config, name: &str) -> Result<()> {
         // Wait for VM to stop
         for _ in 0..15 {
             if !check_vm_running(config, name)? {
-                info!("VM {} stopped", name);
+                if json_output {
+                    let result = VmResult {
+                        success: true,
+                        message: format!("VM {} stopped", name),
+                    };
+                    println!("{}", serde_json::to_string_pretty(&result)?);
+                } else {
+                    info!("VM {} stopped", name);
+                }
                 return Ok(());
             }
             
@@ -437,11 +561,19 @@ pub async fn stop(config: &Config, name: &str) -> Result<()> {
         }
     }
     
-    info!("VM {} stopped", name);
+    if json_output {
+        let result = VmResult {
+            success: true,
+            message: format!("VM {} stopped", name),
+        };
+        println!("{}", serde_json::to_string_pretty(&result)?);
+    } else {
+        info!("VM {} stopped", name);
+    }
     Ok(())
 }
 
-pub async fn delete(config: &Config, name: &str) -> Result<()> {
+pub async fn delete(config: &Config, name: &str, json_output: bool) -> Result<()> {
     let vm_dir = config.vm_dir(name);
     
     if !vm_dir.exists() {
@@ -450,7 +582,7 @@ pub async fn delete(config: &Config, name: &str) -> Result<()> {
     
     // Stop VM if running
     if check_vm_running(config, name)? {
-        stop(config, name).await?;
+        stop(config, name, false).await?;
     }
     
     // Clean up networking
@@ -459,7 +591,15 @@ pub async fn delete(config: &Config, name: &str) -> Result<()> {
     // Remove VM directory
     fs::remove_dir_all(vm_dir)?;
     
-    info!("VM {} removed", name);
+    if json_output {
+        let result = VmResult {
+            success: true,
+            message: format!("VM {} removed", name),
+        };
+        println!("{}", serde_json::to_string_pretty(&result)?);
+    } else {
+        info!("VM {} removed", name);
+    }
     Ok(())
 }
 
