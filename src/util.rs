@@ -62,10 +62,10 @@ pub fn install_dependency(package: &str) -> Result<()> {
     debug!("Installing dependency: {}", package);
     
     // Update package list
-    run_command("apt-get", &["-qq", "update"])?;
+    run_command("sudo apt-get", &["-qq", "update"])?;
     
     // Install package
-    run_command("apt-get", &["-y", "install", package])?;
+    run_command("sudo apt-get", &["-y", "install", package])?;
     
     Ok(())
 }
