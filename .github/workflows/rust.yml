@@ -22,18 +22,14 @@ jobs:
       run: |
         sudo apt-get update
         sudo apt-get install qemu-utils genisoimage iptables jq -y
-    - name: Check current group in kvm
-      run: id -nG | grep -q '\<kvm\>' && echo "✔ already in kvm" || echo "✘ not yet"
-    - name: Add current user to kvm group
-      run: sudo usermod -aG kvm $USER
-    - name: Check is user added to kvm group
-      run: id -nG | grep -q '\<kvm\>' && echo "✔ already in kvm" || echo "✘ not yet"
+    - name: Give the runner user rw access to /dev/kvm
+      run: sudo setfacl -m u:${USER}:rw /dev/kvm
     - name: List VMs
-      run: cargo run -- list
+      run: RUST_LOG=info cargo run -- list
     - name: Create VM
       run: |
-        cargo run -- create ubuntu
-        cargo run -- list
+        RUST_LOG=info cargo run -- create ubuntu
+        RUST_LOG=info cargo run -- list
     - name: Debugging with tmate
       if: failure()
       uses: mxschmitt/action-tmate@v3.22
