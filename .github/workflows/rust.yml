@@ -11,9 +11,7 @@ env:
 
 jobs:
   build:
-
     runs-on: ubuntu-latest
-
     steps:
     - uses: actions/checkout@v4
     - name: Build
@@ -30,6 +28,7 @@ jobs:
       run: |
         RUST_LOG=info cargo run -- create ubuntu
         RUST_LOG=info cargo run -- list
-    - name: Debugging with tmate
-      if: failure()
-      uses: mxschmitt/action-tmate@v3.22
+        RUST_LOG=info cargo run -- get ubuntu
+        RUST_LOG=info cargo run -- stop ubuntu
+        RUST_LOG=info cargo run -- start ubuntu
+        RUST_LOG=info cargo run -- delete ubuntu
