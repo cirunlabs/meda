@@ -33,8 +33,8 @@ jobs:
       run: RUST_LOG=info cargo run -- get ubuntu
     - name: Stop VM
       run: RUST_LOG=info cargo run -- stop ubuntu
-    - name: Start VM
-      run: RUST_LOG=info cargo run -- start ubuntu
+    # - name: Start VM
+    #   run: RUST_LOG=info cargo run -- start ubuntu
     - name: Delete VM
       run: RUST_LOG=info cargo run -- delete ubuntu
 
