@@ -18,8 +18,22 @@ jobs:
     - uses: actions/checkout@v4
     - name: Build
       run: cargo build --verbose
-    - name: Run tests
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install qemu-utils genisoimage iptables jq -y
+    - name: Check current group in kvm
+      run: id -nG | grep -q '\<kvm\>' && echo "✔ already in kvm" || echo "✘ not yet"
+    - name: Add current user to kvm group
+      run: sudo usermod -aG kvm $USER
+    - name: Check is user added to kvm group
+      run: id -nG | grep -q '\<kvm\>' && echo "✔ already in kvm" || echo "✘ not yet"
+    - name: List VMs
       run: cargo run -- list
+    - name: Create VM
+      run: |
+        cargo run -- create ubuntu
+        cargo run -- list
     - name: Debugging with tmate
       if: failure()
       uses: mxschmitt/action-tmate@v3.22
