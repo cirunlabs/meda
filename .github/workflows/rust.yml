@@ -22,25 +22,29 @@ jobs:
         sudo apt-get install qemu-utils genisoimage iptables jq -y
     - name: Give the runner user rw access to /dev/kvm
       run: sudo setfacl -m u:${USER}:rw /dev/kvm
-
     - name: List VMs
       run: RUST_LOG=info cargo run -- list
     - name: Create VM
       run: RUST_LOG=info cargo run -- create ubuntu
+    - name: Cloud Hypervisor logs
+      if: always()
+      run: cat /home/runner/.ch-vms/vms/ubuntu/ch.log
     - name: List VM
       run: RUST_LOG=info cargo run -- list
     - name: Get VM
       run: RUST_LOG=info cargo run -- get ubuntu
     - name: Stop VM
-      run: RUST_LOG=info cargo run -- stop ubuntu
-    # - name: Start VM
-    #   run: RUST_LOG=info cargo run -- start ubuntu
+      run: |
+        sudo setfacl -m u:${USER}:rw /dev/kvm
+        RUST_LOG=info cargo run -- stop ubuntu
+    - name: Start VM
+      run: |
+        sudo setfacl -m u:${USER}:rw /dev/kvm
+        RUST_LOG=info cargo run -- start ubuntu
     - name: Delete VM
-      run: RUST_LOG=info cargo run -- delete ubuntu
-
+      run: |
+        sudo setfacl -m u:${USER}:rw /dev/kvm
+        RUST_LOG=info cargo run -- delete ubuntu
     - name: Cloud Hypervisor logs
       if: always()
       run: cat /home/runner/.ch-vms/vms/ubuntu/ch.log
-    - name: Debugging with tmate
-      if: always()
-      uses: mxschmitt/action-tmate@v3.22      
