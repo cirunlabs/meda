@@ -41,3 +41,6 @@ jobs:
     - name: Cloud Hypervisor logs
       if: always()
       run: cat /home/runner/.ch-vms/vms/ubuntu/ch.log
+    - name: Debugging with tmate
+      if: always()
+      uses: mxschmitt/action-tmate@v3.22      
