@@ -45,6 +45,3 @@ jobs:
       run: |
         sudo setfacl -m u:${USER}:rw /dev/kvm
         RUST_LOG=info cargo run -- delete ubuntu
-    - name: Cloud Hypervisor logs
-      if: always()
-      run: cat /home/runner/.ch-vms/vms/ubuntu/ch.log
