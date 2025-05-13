@@ -33,7 +33,6 @@ archives:
     files:
       - README.md
       - LICENSE*
-      - ch-vm.sh
 
 changelog:
   sort: asc
