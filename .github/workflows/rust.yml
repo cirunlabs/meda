@@ -29,11 +29,26 @@ jobs:
       run: |
         RUST_LOG=info cargo run -- create ubuntu
         sleep 10
-    - name: SSH into the VM
-      run : |
-        ip=$(target/debug/meda list --json  | jq -r '.[0].ip')
-        echo $ip
-        sshpass -p 'cirun' ssh $ip@192.168.33.2
+    - name: SSH into the VM with retries
+      run: |
+        ip=$(target/debug/meda list --json | jq -r '.[0].ip')
+        echo "Connecting to IP: $ip"
+    
+        max_retries=10
+        delay=3
+        success=0
+    
+        for i in $(seq 1 $max_retries); do
+          echo "Attempt $i to SSH into $ip..."
+          sshpass -p 'cirun' ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 cirun@$ip "echo 'SSH successful'" && success=1 && break
+          echo "SSH attempt $i failed, retrying in $delay seconds..."
+          sleep $delay
+        done
+    
+        if [ $success -ne 1 ]; then
+          echo "SSH failed after $max_retries attempts"
+          exit 1
+        fi
     - name: Cloud Hypervisor logs
       if: always()
       run: cat /home/runner/.ch-vms/vms/ubuntu/ch.log
