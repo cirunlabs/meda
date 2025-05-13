@@ -18,7 +18,7 @@ success=0
 # Define SSH function to avoid repetition
 ssh_execute() {
     local cmd="$1"
-    log "Executing: $cmd"
+    echo "Executing: $cmd"
     sshpass -p 'cirun' ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 cirun@$ip "$cmd"
     return $?
 }
