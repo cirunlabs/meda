@@ -26,7 +26,7 @@ ssh_execute() {
 # Try to establish connection
 for i in $(seq 1 $max_retries); do
     log "Attempt $i to SSH into $ip..."
-    if ssh_execute "log 'SSH successful'"; then
+    if ssh_execute "echo 'SSH successful'"; then
     success=1
     break
     fi
