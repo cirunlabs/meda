@@ -134,15 +134,14 @@ pub async fn create(config: &Config, name: &str, user_data_path: Option<&str>, j
     } else {
         let default_user_data = r#"#cloud-config
 users:
-  - default
-  - name: ubuntu
+  - name: cirun
     sudo: ALL=(ALL) NOPASSWD:ALL
-    lock_passwd: False
-    inactive: False
-    ssh_authorized_keys:
-      - ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIJEVWl1nGkztNpYjY0/QHQ0xOTw5hlUbZGxhY0XH7D4h aktech
-      - ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIH5/jw+u5VH245tTKooHhKWJ8G2FMms93tF1fsWRo+n+ akhorse@homelab
-package_update: false
+    passwd: cirun
+    lock_passwd: false
+    inactive: false
+    groups: sudo
+    shell: /bin/bash
+ssh_pwauth: true
 "#;
         write_string_to_file(&vm_dir.join("user-data"), default_user_data)?;
     }
