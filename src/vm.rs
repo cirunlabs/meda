@@ -136,7 +136,7 @@ pub async fn create(config: &Config, name: &str, user_data_path: Option<&str>, j
 users:
   - name: cirun
     sudo: ALL=(ALL) NOPASSWD:ALL
-    passwd: cirun
+    passwd: $6$rEnJIC81m0vtbMZY$nMsAwJxOwDTyTGfZ1w2.rVssmJbAk0I7hz3T4ufaTcOb5m81Ix9SqPQVnl49.tbXrajEw4lG4qW0g0sVXTZ5X.
     lock_passwd: false
     inactive: false
     groups: sudo
