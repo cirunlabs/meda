@@ -38,6 +38,12 @@ pub enum Error {
     #[error("HTTP error: {0}")]
     HttpError(#[from] reqwest::Error),
     
+    #[error("Invalid image name: {0}")]
+    InvalidImageName(String),
+    
+    #[error("Image not found: {0}")]
+    ImageNotFound(String),
+    
     #[error("{0}")]
     Other(String),
 }

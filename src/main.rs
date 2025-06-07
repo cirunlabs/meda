@@ -1,6 +1,7 @@
 mod cli;
 mod config;
 mod error;
+mod image;
 mod network;
 mod vm;
 mod util;
@@ -79,6 +80,43 @@ async fn main() -> Result<()> {
             } else {
                 result?;
             }
+        }
+        Commands::Pull { image, registry, org } => {
+            image::pull(&config, &image, registry.as_deref(), org.as_deref(), cli.json).await?;
+        }
+        Commands::Push { name, image, registry, dry_run } => {
+            image::push(&config, &name, &image, registry.as_deref(), dry_run, cli.json).await?;
+        }
+        Commands::Images => {
+            image::list(&config, cli.json).await?;
+        }
+        Commands::Rmi { image, registry, org, force } => {
+            image::remove(&config, &image, registry.as_deref(), org.as_deref(), force, cli.json).await?;
+        }
+        Commands::Prune { all, force } => {
+            image::prune(&config, all, force, cli.json).await?;
+        }
+        Commands::CreateImage { name, tag, registry, org, from_vm } => {
+            let default_registry = registry.as_deref().unwrap_or("ghcr.io");
+            let default_org = org.as_deref().unwrap_or("cirunlabs");
+            
+            if let Some(vm_name) = from_vm {
+                image::create_from_vm(&config, &vm_name, &name, &tag, default_registry, default_org, cli.json).await?;
+            } else {
+                image::create_base_image(&config, &name, &tag, default_registry, default_org, cli.json).await?;
+            }
+        }
+        Commands::Run { image, name, registry, org, user_data, no_start } => {
+            image::run_from_image(
+                &config,
+                &image,
+                name.as_deref(),
+                registry.as_deref(),
+                org.as_deref(),
+                user_data.as_deref(),
+                no_start,
+                cli.json,
+            ).await?;
         }
     }
     
