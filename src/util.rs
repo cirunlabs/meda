@@ -151,3 +151,95 @@ pub fn check_process_running(pid: u32) -> bool {
 pub fn write_string_to_file(path: &Path, content: &str) -> Result<()> {
     fs::write(path, content).map_err(|e| Error::Io(e))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::{TempDir, NamedTempFile};
+    use std::fs;
+
+    #[test]
+    fn test_run_command_success() {
+        let result = run_command("echo", &["hello"]);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_run_command_failure() {
+        let result = run_command("false", &[]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_run_command_with_output_success() {
+        let result = run_command_with_output("echo", &["hello"]);
+        assert!(result.is_ok());
+        
+        let output = result.unwrap();
+        assert_eq!(String::from_utf8(output.stdout).unwrap().trim(), "hello");
+    }
+
+    #[test]
+    fn test_run_command_with_output_failure() {
+        let result = run_command_with_output("false", &[]);
+        assert!(result.is_ok()); // Command runs but fails
+        
+        let output = result.unwrap();
+        assert!(!output.status.success());
+    }
+
+    #[test]
+    fn test_check_dependency_exists() {
+        let result = check_dependency("echo");
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_check_dependency_missing() {
+        let result = check_dependency("nonexistent-command-12345");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_check_process_running() {
+        let current_pid = std::process::id();
+        assert!(check_process_running(current_pid));
+        
+        assert!(!check_process_running(999999));
+    }
+
+    #[test]
+    fn test_write_string_to_file() {
+        let temp_file = NamedTempFile::new().unwrap();
+        let path = temp_file.path();
+        
+        let content = "test content";
+        let result = write_string_to_file(path, content);
+        assert!(result.is_ok());
+        
+        let read_content = fs::read_to_string(path).unwrap();
+        assert_eq!(read_content, content);
+    }
+
+    #[tokio::test]
+    async fn test_download_file_success() {
+        let temp_dir = TempDir::new().unwrap();
+        let dest = temp_dir.path().join("test_file");
+        
+        let result = download_file("https://httpbin.org/json", &dest).await;
+        assert!(result.is_ok());
+        assert!(dest.exists());
+        
+        let content = fs::read_to_string(&dest).unwrap();
+        assert!(content.contains("slideshow"));
+    }
+
+    #[tokio::test]
+    async fn test_download_file_failure() {
+        let temp_dir = TempDir::new().unwrap();
+        let dest = temp_dir.path().join("test_file");
+        
+        let result = download_file("https://httpbin.org/status/404", &dest).await;
+        assert!(result.is_err());
+    }
+}

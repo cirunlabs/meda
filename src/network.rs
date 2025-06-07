@@ -193,3 +193,94 @@ pub async fn cleanup_networking(config: &Config, name: &str) -> Result<()> {
     
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::TempDir;
+    use std::env;
+
+    #[test]
+    fn test_generate_random_mac() {
+        let mac = generate_random_mac();
+        assert!(mac.starts_with("52:54:"));
+        assert_eq!(mac.len(), 17); // XX:XX:XX:XX:XX:XX format
+        assert_eq!(mac.chars().filter(|&c| c == ':').count(), 5);
+    }
+
+    #[test]
+    fn test_generate_random_octet() {
+        let octet = generate_random_octet();
+        assert!(octet >= 16);
+        assert!(octet <= 215); // 16 + 199
+    }
+
+    #[tokio::test]
+    async fn test_generate_unique_subnet_empty_dir() {
+        let temp_dir = TempDir::new().unwrap();
+        
+        env::set_var("MEDA_VM_DIR", temp_dir.path().to_str().unwrap());
+        let config = Config::new().unwrap();
+        env::remove_var("MEDA_VM_DIR");
+        
+        let subnet = generate_unique_subnet(&config).await.unwrap();
+        assert!(subnet.starts_with("192.168."));
+        
+        let parts: Vec<&str> = subnet.split('.').collect();
+        assert_eq!(parts.len(), 3);
+        assert_eq!(parts[0], "192");
+        assert_eq!(parts[1], "168");
+        
+        let octet: u8 = parts[2].parse().unwrap();
+        assert!(octet >= 16);
+        assert!(octet <= 215);
+    }
+
+    #[tokio::test]
+    async fn test_generate_unique_subnet_with_existing() {
+        let temp_dir = TempDir::new().unwrap();
+        
+        let vm_dir = temp_dir.path().join("test-vm");
+        std::fs::create_dir_all(&vm_dir).unwrap();
+        std::fs::write(vm_dir.join("subnet"), "192.168.100").unwrap();
+        
+        env::set_var("MEDA_VM_DIR", temp_dir.path().to_str().unwrap());
+        let config = Config::new().unwrap();
+        env::remove_var("MEDA_VM_DIR");
+        
+        let subnet = generate_unique_subnet(&config).await.unwrap();
+        assert!(subnet.starts_with("192.168."));
+        assert_ne!(subnet, "192.168.100");
+    }
+
+    #[test]
+    fn test_mac_address_uniqueness() {
+        let mut macs = std::collections::HashSet::new();
+        
+        for _ in 0..100 {
+            let mac = generate_random_mac();
+            assert!(!macs.contains(&mac), "Generated duplicate MAC: {}", mac);
+            macs.insert(mac);
+        }
+    }
+
+    #[test]
+    fn test_octet_range() {
+        for _ in 0..1000 {
+            let octet = generate_random_octet();
+            assert!(octet >= 16 && octet <= 215);
+        }
+    }
+
+    #[tokio::test]
+    async fn test_cleanup_networking_missing_vm() {
+        let temp_dir = TempDir::new().unwrap();
+        
+        env::set_var("MEDA_VM_DIR", temp_dir.path().to_str().unwrap());
+        let config = Config::new().unwrap();
+        env::remove_var("MEDA_VM_DIR");
+        
+        let result = cleanup_networking(&config, "nonexistent-vm").await;
+        assert!(result.is_ok());
+    }
+}

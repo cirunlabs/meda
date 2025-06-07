@@ -1254,8 +1254,8 @@ pub async fn run_from_image(
         info!("Creating VM '{}' from image '{}'", vm_name, image_ref.url());
     }
     
-    // Bootstrap to ensure we have the necessary binaries
-    vm::bootstrap(config).await?;
+    // Bootstrap only the hypervisor binaries (we already have the image)
+    vm::bootstrap_binaries_only(config).await?;
     
     // Create VM directory
     fs::create_dir_all(&vm_dir)?;
@@ -1455,4 +1455,196 @@ fi
     }
     
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::TempDir;
+    use std::env;
+
+    #[test]
+    fn test_image_ref_parse_simple() {
+        let image_ref = ImageRef::parse("ubuntu", "ghcr.io", "cirunlabs").unwrap();
+        assert_eq!(image_ref.registry, "ghcr.io");
+        assert_eq!(image_ref.org, "cirunlabs");
+        assert_eq!(image_ref.name, "ubuntu");
+        assert_eq!(image_ref.tag, "latest");
+    }
+
+    #[test]
+    fn test_image_ref_parse_with_tag() {
+        let image_ref = ImageRef::parse("ubuntu:v1.0", "ghcr.io", "cirunlabs").unwrap();
+        assert_eq!(image_ref.registry, "ghcr.io");
+        assert_eq!(image_ref.org, "cirunlabs");
+        assert_eq!(image_ref.name, "ubuntu");
+        assert_eq!(image_ref.tag, "v1.0");
+    }
+
+    #[test]
+    fn test_image_ref_parse_with_org() {
+        let image_ref = ImageRef::parse("myorg/ubuntu:v1.0", "ghcr.io", "cirunlabs").unwrap();
+        assert_eq!(image_ref.registry, "ghcr.io");
+        assert_eq!(image_ref.org, "myorg");
+        assert_eq!(image_ref.name, "ubuntu");
+        assert_eq!(image_ref.tag, "v1.0");
+    }
+
+    #[test]
+    fn test_image_ref_parse_with_registry() {
+        let image_ref = ImageRef::parse("ghcr.io/myorg/ubuntu:v1.0", "registry.com", "defaultorg").unwrap();
+        assert_eq!(image_ref.registry, "ghcr.io");
+        assert_eq!(image_ref.org, "myorg");
+        assert_eq!(image_ref.name, "ubuntu");
+        assert_eq!(image_ref.tag, "v1.0");
+    }
+
+    #[test]
+    fn test_image_ref_parse_registry_detection() {
+        let image_ref = ImageRef::parse("registry.example.com/ubuntu", "ghcr.io", "cirunlabs").unwrap();
+        assert_eq!(image_ref.registry, "registry.example.com");
+        assert_eq!(image_ref.org, "cirunlabs");
+        assert_eq!(image_ref.name, "ubuntu");
+        assert_eq!(image_ref.tag, "latest");
+    }
+
+    #[test]
+    fn test_image_ref_url() {
+        let image_ref = ImageRef {
+            registry: "ghcr.io".to_string(),
+            org: "cirunlabs".to_string(),
+            name: "ubuntu".to_string(),
+            tag: "v1.0".to_string(),
+        };
+        assert_eq!(image_ref.url(), "ghcr.io/cirunlabs/ubuntu:v1.0");
+    }
+
+    #[test]
+    fn test_image_ref_local_dir() {
+        let temp_dir = TempDir::new().unwrap();
+        env::set_var("MEDA_ASSET_DIR", temp_dir.path().to_str().unwrap());
+        let config = Config::new().unwrap();
+        env::remove_var("MEDA_ASSET_DIR");
+        
+        let image_ref = ImageRef {
+            registry: "ghcr.io".to_string(),
+            org: "cirunlabs".to_string(),
+            name: "ubuntu".to_string(),
+            tag: "v1.0".to_string(),
+        };
+        
+        let local_dir = image_ref.local_dir(&config);
+        assert!(local_dir.to_string_lossy().contains("images"));
+        assert!(local_dir.to_string_lossy().contains("ghcr_io"));
+        assert!(local_dir.to_string_lossy().contains("cirunlabs"));
+        assert!(local_dir.to_string_lossy().contains("ubuntu"));
+        assert!(local_dir.to_string_lossy().contains("v1.0"));
+    }
+
+    #[test]
+    fn test_image_manifest_save_and_load() {
+        let temp_dir = TempDir::new().unwrap();
+        
+        let mut artifacts = HashMap::new();
+        artifacts.insert("base_image".to_string(), "base.raw".to_string());
+        
+        let mut metadata = HashMap::new();
+        metadata.insert("os".to_string(), "ubuntu".to_string());
+        
+        let manifest = ImageManifest {
+            name: "test".to_string(),
+            tag: "latest".to_string(),
+            registry: "ghcr.io".to_string(),
+            org: "cirunlabs".to_string(),
+            artifacts,
+            metadata,
+            created: 1234567890,
+        };
+        
+        // Save manifest
+        manifest.save(&temp_dir.path().to_path_buf()).unwrap();
+        
+        // Load manifest
+        let loaded = ImageManifest::load(&temp_dir.path().to_path_buf()).unwrap();
+        assert_eq!(loaded.name, "test");
+        assert_eq!(loaded.tag, "latest");
+        assert_eq!(loaded.registry, "ghcr.io");
+        assert_eq!(loaded.org, "cirunlabs");
+        assert_eq!(loaded.created, 1234567890);
+        assert_eq!(loaded.artifacts.get("base_image"), Some(&"base.raw".to_string()));
+        assert_eq!(loaded.metadata.get("os"), Some(&"ubuntu".to_string()));
+    }
+
+    #[test]
+    fn test_image_manifest_load_missing_file() {
+        let temp_dir = TempDir::new().unwrap();
+        let result = ImageManifest::load(&temp_dir.path().to_path_buf());
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_calculate_directory_size() {
+        let temp_dir = TempDir::new().unwrap();
+        
+        // Create some test files
+        std::fs::write(temp_dir.path().join("file1.txt"), "hello").unwrap();
+        std::fs::write(temp_dir.path().join("file2.txt"), "world!").unwrap();
+        
+        let size = calculate_directory_size(&temp_dir.path().to_path_buf()).unwrap();
+        assert_eq!(size, 11); // "hello" (5) + "world!" (6)
+    }
+
+    #[test]
+    fn test_calculate_directory_size_with_subdirs() {
+        let temp_dir = TempDir::new().unwrap();
+        
+        // Create files and subdirectories
+        std::fs::write(temp_dir.path().join("file1.txt"), "hello").unwrap();
+        
+        let subdir = temp_dir.path().join("subdir");
+        std::fs::create_dir(&subdir).unwrap();
+        std::fs::write(subdir.join("file2.txt"), "world!").unwrap();
+        
+        let size = calculate_directory_size(&temp_dir.path().to_path_buf()).unwrap();
+        assert_eq!(size, 11); // "hello" (5) + "world!" (6)
+    }
+
+    #[tokio::test]
+    async fn test_list_empty_images_dir() {
+        let temp_dir = TempDir::new().unwrap();
+        
+        env::set_var("MEDA_ASSET_DIR", temp_dir.path().to_str().unwrap());
+        let config = Config::new().unwrap();
+        env::remove_var("MEDA_ASSET_DIR");
+        
+        // Should not error when images directory doesn't exist
+        let result = list(&config, true).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_prune_missing_images_dir() {
+        let temp_dir = TempDir::new().unwrap();
+        
+        env::set_var("MEDA_ASSET_DIR", temp_dir.path().to_str().unwrap());
+        let config = Config::new().unwrap();
+        env::remove_var("MEDA_ASSET_DIR");
+        
+        // Should not error when images directory doesn't exist
+        let result = prune(&config, false, false, true).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_remove_nonexistent_image() {
+        let temp_dir = TempDir::new().unwrap();
+        
+        env::set_var("MEDA_ASSET_DIR", temp_dir.path().to_str().unwrap());
+        let config = Config::new().unwrap();
+        env::remove_var("MEDA_ASSET_DIR");
+        
+        // Should handle gracefully when image doesn't exist
+        let result = remove(&config, "nonexistent", None, None, true, true).await;
+        assert!(result.is_ok());
+    }
 }

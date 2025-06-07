@@ -14,6 +14,12 @@ pub enum Error {
     #[error("VM {0} does not exist")]
     VmNotFound(String),
     
+    #[error("VM {0} is already running")]
+    VmAlreadyRunning(String),
+    
+    #[error("VM {0} is not running")]
+    VmNotRunning(String),
+    
     #[error("Failed to download {0}: {1}")]
     DownloadFailed(String, String),
     
@@ -22,9 +28,6 @@ pub enum Error {
     
     #[error("Network configuration for VM {0} is missing")]
     NetworkConfigMissing(String),
-    
-    #[error("Failed to start VM: {0}")]
-    VmStartFailed(String),
     
     #[error("Home directory not found")]
     HomeDirNotFound,
