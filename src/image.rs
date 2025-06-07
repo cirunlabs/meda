@@ -304,63 +304,74 @@ pub async fn pull(
     
     // ORAS downloads files to the temp directory, so we need to scan there first
     // If that fails, try scanning the assets images directory as a fallback
-    let mut conversion_success = false;
     
     // First try temp directory where ORAS might have downloaded files
     if let Err(_) = convert_oras_artifacts_to_meda(&temp_dir, &image_dir, &image_ref, json).await {
-        // ORAS downloads to absolute paths with SHA256 digests, need to find them
-        let assets_base = config.asset_dir.join("images");
-        let registry_dir = assets_base.join(&image_ref.registry.replace(".", "_"));
-        let org_dir = registry_dir.join(&image_ref.org);
-        
-        if !json {
-            println!("🔍 Searching for ORAS downloads in {}", org_dir.display());
-        }
-        
-        // Look for any directory that contains sha256 (ORAS uses digest-based paths)
-        let mut found_source_dir = None;
-        if org_dir.exists() {
-            for entry in fs::read_dir(&org_dir)? {
-                let entry = entry?;
-                let path = entry.path();
-                if path.is_dir() {
-                    let dir_name = path.file_name().unwrap().to_string_lossy();
-                    if dir_name.contains("@sha256") || dir_name.contains("sha256") {
-                        // Found the SHA256 directory, now look for the actual digest subdirectory
-                        for subentry in fs::read_dir(&path)? {
-                            let subentry = subentry?;
-                            let subpath = subentry.path();
-                            if subpath.is_dir() {
-                                found_source_dir = Some(subpath);
+        // Check if ORAS downloaded directly to the correct tag-based directory structure
+        if image_dir.exists() {
+            if !json {
+                println!("📁 Found ORAS artifacts in tag directory: {}", image_dir.display());
+            }
+            // The files are already in the correct location, just create a manifest
+            create_manifest_from_tag_directory(&image_dir, &image_ref, json).await?;
+        } else {
+            // ORAS downloads to absolute paths with SHA256 digests, need to find them
+            // Check both new and old directory locations for compatibility
+            let search_dirs = vec![
+                config.asset_dir.join("images"),  // New ~/.meda location
+                dirs::home_dir().unwrap_or_default().join(".ch-vms").join("assets").join("images"), // Old location
+            ];
+            
+            let mut found_source_dir = None;
+            for assets_base in search_dirs {
+                let registry_dir = assets_base.join(&image_ref.registry.replace(".", "_"));
+                let org_dir = registry_dir.join(&image_ref.org);
+                
+                if !json {
+                    println!("🔍 Searching for ORAS downloads in {}", org_dir.display());
+                }
+                
+                // Look for any directory that contains sha256 (ORAS uses digest-based paths)
+                if org_dir.exists() {
+                    for entry in fs::read_dir(&org_dir)? {
+                        let entry = entry?;
+                        let path = entry.path();
+                        if path.is_dir() {
+                            let dir_name = path.file_name().unwrap().to_string_lossy();
+                            if dir_name.contains("@sha256") || dir_name.contains("sha256") {
+                                // Found the SHA256 directory, now look for the actual digest subdirectory
+                                for subentry in fs::read_dir(&path)? {
+                                    let subentry = subentry?;
+                                    let subpath = subentry.path();
+                                    if subpath.is_dir() {
+                                        found_source_dir = Some(subpath);
+                                        break;
+                                    }
+                                }
                                 break;
                             }
                         }
-                        break;
+                    }
+                    if found_source_dir.is_some() {
+                        break; // Found artifacts, stop searching
                     }
                 }
             }
-        }
-        
-        if let Some(source_dir) = found_source_dir {
-            if !json {
-                println!("📁 Found ORAS artifacts in: {}", source_dir.display());
+            
+            if let Some(source_dir) = found_source_dir {
+                if !json {
+                    println!("📁 Found ORAS artifacts in: {}", source_dir.display());
+                }
+                // Convert from the SHA256 directory to our tag-based directory
+                convert_oras_artifacts_to_meda(&source_dir, &image_dir, &image_ref, json).await?;
+            } else {
+                // No SHA256 directory found, this shouldn't happen with ORAS downloads
+                if !json {
+                    println!("⚠️  No SHA256 artifact directory found, this may indicate an issue with ORAS download");
+                }
+                return Err(Error::Other("ORAS artifacts not found in expected SHA256 directory".to_string()));
             }
-            // Convert from the SHA256 directory to our tag-based directory
-            convert_oras_artifacts_to_meda(&source_dir, &image_dir, &image_ref, json).await?;
-            conversion_success = true;
-        } else {
-            // No SHA256 directory found, this shouldn't happen with ORAS downloads
-            if !json {
-                println!("⚠️  No SHA256 artifact directory found, this may indicate an issue with ORAS download");
-            }
-            return Err(Error::Other("ORAS artifacts not found in expected SHA256 directory".to_string()));
         }
-    } else {
-        conversion_success = true;
-    }
-    
-    if !conversion_success {
-        return Err(Error::Other("Failed to convert ORAS artifacts - no files found in expected locations".to_string()));
     }
     
     // Clean up temp files
@@ -758,14 +769,14 @@ async fn convert_oras_artifacts_to_meda(
     Ok(())
 }
 
-/// Create a manifest from existing files in a directory (when ORAS downloads directly)
-async fn create_manifest_from_existing_files(
+/// Create a manifest from files already in the correct tag-based directory
+async fn create_manifest_from_tag_directory(
     image_dir: &PathBuf,
     image_ref: &ImageRef,
     json: bool,
 ) -> Result<()> {
     if !json {
-        println!("📝 Creating manifest from existing files in {}", image_dir.display());
+        println!("📝 Creating manifest from tag directory: {}", image_dir.display());
     }
     
     let mut artifacts = HashMap::new();
@@ -842,280 +853,6 @@ async fn create_manifest_from_existing_files(
     
     Ok(())
 }
-
-/// Create an OCI layout tar file from VM artifacts
-async fn create_oci_layout_tar(
-    source_dir: &PathBuf,
-    manifest: &ImageManifest,
-    tar_path: &PathBuf,
-    json: bool,
-) -> Result<()> {
-    use std::io::Write;
-    use sha2::{Sha256, Digest};
-    
-    if !json {
-        println!("📦 Creating OCI layout tar from VM artifacts");
-    }
-    
-    // Create temporary OCI layout directory
-    let layout_dir = tar_path.parent().unwrap().join("oci-layout");
-    fs::create_dir_all(&layout_dir)?;
-    fs::create_dir_all(layout_dir.join("blobs").join("sha256"))?;
-    
-    // Write OCI layout version file
-    let oci_layout = serde_json::json!({
-        "imageLayoutVersion": "1.0.0"
-    });
-    fs::write(layout_dir.join("oci-layout"), serde_json::to_string_pretty(&oci_layout)?)?;
-    
-    // Process artifacts as layers
-    let mut layers = Vec::new();
-    let mut total_size = 0u64;
-    
-    for (artifact_type, artifact_file) in &manifest.artifacts {
-        let artifact_path = source_dir.join(artifact_file);
-        if artifact_path.exists() {
-            let data = fs::read(&artifact_path)?;
-            let size = data.len() as u64;
-            total_size += size;
-            
-            // Calculate SHA256 digest
-            let mut hasher = Sha256::new();
-            hasher.update(&data);
-            let digest = format!("sha256:{:x}", hasher.finalize());
-            
-            // Write blob
-            let blob_path = layout_dir.join("blobs").join("sha256").join(&digest[7..]);
-            fs::write(&blob_path, &data)?;
-            
-            // Create layer descriptor
-            let layer_desc = serde_json::json!({
-                "mediaType": "application/vnd.meda.vm.layer.v1",
-                "size": size,
-                "digest": digest,
-                "annotations": {
-                    "meda.artifact.type": artifact_type,
-                    "meda.artifact.file": artifact_file
-                }
-            });
-            
-            layers.push(layer_desc);
-            
-            if !json {
-                println!("📁 Added layer: {} ({:.2} MB)", artifact_type, size as f64 / 1024.0 / 1024.0);
-            }
-        }
-    }
-    
-    // Create config blob
-    let config_data = serde_json::json!({
-        "architecture": "amd64",
-        "os": "linux",
-        "meda_metadata": manifest.metadata,
-        "created": manifest.created
-    });
-    let config_bytes = serde_json::to_vec(&config_data)?;
-    let mut config_hasher = Sha256::new();
-    config_hasher.update(&config_bytes);
-    let config_digest = format!("sha256:{:x}", config_hasher.finalize());
-    
-    let config_blob_path = layout_dir.join("blobs").join("sha256").join(&config_digest[7..]);
-    fs::write(&config_blob_path, &config_bytes)?;
-    
-    // Create manifest
-    let manifest_data = serde_json::json!({
-        "schemaVersion": 2,
-        "mediaType": "application/vnd.oci.image.manifest.v1+json",
-        "config": {
-            "mediaType": "application/vnd.oci.image.config.v1+json",
-            "size": config_bytes.len(),
-            "digest": config_digest
-        },
-        "layers": layers
-    });
-    let manifest_bytes = serde_json::to_vec(&manifest_data)?;
-    let mut manifest_hasher = Sha256::new();
-    manifest_hasher.update(&manifest_bytes);
-    let manifest_digest = format!("sha256:{:x}", manifest_hasher.finalize());
-    
-    let manifest_blob_path = layout_dir.join("blobs").join("sha256").join(&manifest_digest[7..]);
-    fs::write(&manifest_blob_path, &manifest_bytes)?;
-    
-    // Create index
-    let index_data = serde_json::json!({
-        "schemaVersion": 2,
-        "manifests": [{
-            "mediaType": "application/vnd.oci.image.manifest.v1+json",
-            "size": manifest_bytes.len(),
-            "digest": manifest_digest,
-            "annotations": {
-                "org.opencontainers.image.ref.name": format!("{}:{}", manifest.name, manifest.tag)
-            }
-        }]
-    });
-    fs::write(layout_dir.join("index.json"), serde_json::to_string_pretty(&index_data)?)?;
-    
-    // Create tar archive
-    let tar_file = fs::File::create(tar_path)?;
-    let mut tar = tar::Builder::new(tar_file);
-    tar.append_dir_all("", &layout_dir)?;
-    tar.finish()?;
-    
-    // Clean up temp layout dir
-    fs::remove_dir_all(&layout_dir).ok();
-    
-    if !json {
-        println!("✅ Created OCI layout tar ({:.2} MB total)", total_size as f64 / 1024.0 / 1024.0);
-    }
-    
-    Ok(())
-}
-
-/// Extract OCI layout tar and convert to Meda image format
-async fn extract_oci_layout_tar(
-    tar_path: &PathBuf,
-    image_dir: &PathBuf,
-    image_ref: &ImageRef,
-    json: bool,
-) -> Result<()> {
-    use std::io::Read;
-    
-    if !json {
-        println!("📦 Extracting OCI layout from tar");
-    }
-    
-    // Create extraction directory
-    let extract_dir = tar_path.parent().unwrap().join("extracted");
-    fs::create_dir_all(&extract_dir)?;
-    
-    // Extract tar
-    let tar_file = fs::File::open(tar_path)?;
-    let mut archive = tar::Archive::new(tar_file);
-    archive.unpack(&extract_dir)?;
-    
-    // Read OCI index to find the manifest
-    let index_path = extract_dir.join("index.json");
-    let index_content = fs::read_to_string(&index_path)?;
-    let index: serde_json::Value = serde_json::from_str(&index_content)?;
-    
-    let manifests = index["manifests"].as_array()
-        .ok_or_else(|| Error::Other("Invalid OCI index: no manifests".to_string()))?;
-    
-    if manifests.is_empty() {
-        return Err(Error::Other("No manifests found in OCI index".to_string()));
-    }
-    
-    // Get first manifest digest
-    let manifest_digest = manifests[0]["digest"].as_str()
-        .ok_or_else(|| Error::Other("Invalid manifest: no digest".to_string()))?;
-    
-    let manifest_hash = &manifest_digest[7..]; // Remove "sha256:" prefix
-    
-    // Read manifest
-    let manifest_path = extract_dir.join("blobs").join("sha256").join(manifest_hash);
-    let manifest_content = fs::read_to_string(&manifest_path)?;
-    let manifest: serde_json::Value = serde_json::from_str(&manifest_content)?;
-    
-    // Read config
-    let config_digest = manifest["config"]["digest"].as_str()
-        .ok_or_else(|| Error::Other("Invalid manifest: no config digest".to_string()))?;
-    let config_hash = &config_digest[7..];
-    let config_path = extract_dir.join("blobs").join("sha256").join(config_hash);
-    let config_content = fs::read_to_string(&config_path)?;
-    let config: serde_json::Value = serde_json::from_str(&config_content)?;
-    
-    // Create image directory
-    fs::create_dir_all(image_dir)?;
-    
-    // Process layers
-    let layers = manifest["layers"].as_array()
-        .ok_or_else(|| Error::Other("Invalid manifest: no layers".to_string()))?;
-    
-    let mut artifacts = HashMap::new();
-    let mut total_size = 0u64;
-    
-    for layer in layers {
-        let layer_digest = layer["digest"].as_str()
-            .ok_or_else(|| Error::Other("Invalid layer: no digest".to_string()))?;
-        let layer_hash = &layer_digest[7..];
-        
-        // Get layer annotations
-        let annotations = layer.get("annotations");
-        let artifact_type = annotations
-            .and_then(|a| a.get("meda.artifact.type"))
-            .and_then(|t| t.as_str())
-            .unwrap_or("unknown");
-        let default_file = format!("{}.bin", artifact_type);
-        let artifact_file = annotations
-            .and_then(|a| a.get("meda.artifact.file"))
-            .and_then(|f| f.as_str())
-            .unwrap_or(&default_file);
-        
-        // Copy layer blob to artifact file
-        let blob_path = extract_dir.join("blobs").join("sha256").join(layer_hash);
-        let artifact_path = image_dir.join(artifact_file);
-        
-        if blob_path.exists() {
-            fs::copy(&blob_path, &artifact_path)?;
-            let size = fs::metadata(&artifact_path)?.len();
-            total_size += size;
-            
-            artifacts.insert(artifact_type.to_string(), artifact_file.to_string());
-            
-            if !json {
-                println!("📁 Extracted artifact: {} ({:.2} MB)", 
-                    artifact_type, size as f64 / 1024.0 / 1024.0);
-            }
-        }
-    }
-    
-    // Create metadata from config
-    let mut metadata = HashMap::new();
-    if let Some(meda_metadata) = config.get("meda_metadata") {
-        if let Some(metadata_obj) = meda_metadata.as_object() {
-            for (k, v) in metadata_obj {
-                if let Some(v_str) = v.as_str() {
-                    metadata.insert(k.clone(), v_str.to_string());
-                }
-            }
-        }
-    }
-    
-    let created = config.get("created")
-        .and_then(|c| c.as_u64())
-        .unwrap_or_else(|| {
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_secs()
-        });
-    
-    // Create Meda manifest
-    let meda_manifest = ImageManifest {
-        name: image_ref.name.clone(),
-        tag: image_ref.tag.clone(),
-        registry: image_ref.registry.clone(),
-        org: image_ref.org.clone(),
-        artifacts,
-        metadata,
-        created,
-    };
-    
-    // Save manifest
-    meda_manifest.save(image_dir)?;
-    
-    // Clean up extraction directory
-    fs::remove_dir_all(&extract_dir).ok();
-    
-    if !json {
-        println!("✅ Converted to Meda format ({:.2} MB total)", 
-            total_size as f64 / 1024.0 / 1024.0);
-    }
-    
-    Ok(())
-}
-
-
 
 /// Remove a specific image
 pub async fn remove(

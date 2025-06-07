@@ -18,7 +18,8 @@ env_logger = "0.10"
 dirs = "5.0"
 nix = { version = "0.27", features = ["net", "process", "sched", "signal"] }
 tempfile = "3.8"
-reqwest = { version = "0.11", features = ["blocking", "json"] }
+reqwest = { version = "0.11", features = ["blocking", "json", "stream"] }
+futures-util = "0.3"
 indicatif = "0.17"
 openssl = { version = "0.10", features = ["vendored"] }
 sha2 = "0.10"

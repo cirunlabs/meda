@@ -22,13 +22,13 @@ pub struct Config {
 impl Config {
     pub fn new() -> Result<Self> {
         let home = dirs::home_dir().ok_or_else(|| Error::HomeDirNotFound)?;
-        let ch_home = home.join(".ch-vms");
+        let ch_home = home.join(".meda");
         
-        let asset_dir = env::var("CH_ASSET_DIR")
+        let asset_dir = env::var("MEDA_ASSET_DIR")
             .map(PathBuf::from)
             .unwrap_or_else(|_| ch_home.join("assets"));
             
-        let vm_root = env::var("CH_VM_DIR")
+        let vm_root = env::var("MEDA_VM_DIR")
             .map(PathBuf::from)
             .unwrap_or_else(|_| ch_home.join("vms"));
             
@@ -42,12 +42,12 @@ impl Config {
         let ch_bin = asset_dir.join("cloud-hypervisor");
         let cr_bin = asset_dir.join("ch-remote");
         
-        let cpus = env::var("CH_CPUS")
+        let cpus = env::var("MEDA_CPUS")
             .map(|v| v.parse().unwrap_or(2))
             .unwrap_or(2);
             
-        let mem = env::var("CH_MEM").unwrap_or_else(|_| "1024M".to_string());
-        let disk_size = env::var("CH_DISK_SIZE").unwrap_or_else(|_| "10G".to_string());
+        let mem = env::var("MEDA_MEM").unwrap_or_else(|_| "1024M".to_string());
+        let disk_size = env::var("MEDA_DISK_SIZE").unwrap_or_else(|_| "10G".to_string());
         
         Ok(Self {
             ch_home,
