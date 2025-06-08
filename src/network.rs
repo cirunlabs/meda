@@ -66,6 +66,74 @@ pub async fn generate_unique_subnet(config: &Config) -> Result<String> {
     ))
 }
 
+pub async fn generate_unique_tap_name(config: &Config, vm_name: &str) -> Result<String> {
+    // Get all existing TAP device names from VM directories
+    let mut used_tap_names = Vec::new();
+    
+    if let Ok(entries) = fs::read_dir(&config.vm_root) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                let tapdev_file = path.join("tapdev");
+                if let Ok(tap_name) = fs::read_to_string(tapdev_file) {
+                    used_tap_names.push(tap_name.trim().to_string());
+                }
+            }
+        }
+    }
+    
+    // Also check currently active TAP devices on the system
+    if let Ok(output) = run_command_with_output("ip", &["link", "show"]) {
+        if output.status.success() {
+            let output_str = String::from_utf8_lossy(&output.stdout);
+            for line in output_str.lines() {
+                if line.contains("tap-") {
+                    if let Some(tap_start) = line.find("tap-") {
+                        let tap_part = &line[tap_start..];
+                        if let Some(colon_pos) = tap_part.find(':') {
+                            let tap_name = tap_part[..colon_pos].to_string();
+                            used_tap_names.push(tap_name);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    
+    // Start with a truncated VM name (max 10 chars for tap- prefix)
+    let base_name = if vm_name.len() > 8 {
+        &vm_name[..8]
+    } else {
+        vm_name
+    };
+    
+    // Try the base name first
+    let candidate = format!("tap-{}", base_name);
+    if !used_tap_names.contains(&candidate) {
+        return Ok(candidate);
+    }
+    
+    // If base name is taken, append numbers
+    for i in 1..=999 {
+        let candidate = format!("tap-{}-{}", base_name, i);
+        if !used_tap_names.contains(&candidate) {
+            return Ok(candidate);
+        }
+    }
+    
+    // If all numeric suffixes are exhausted, use random suffix
+    let mut rng = rand::thread_rng();
+    for _ in 0..100 {
+        let random_suffix: u32 = rng.gen_range(1000..=9999);
+        let candidate = format!("tap-{}-{}", base_name, random_suffix);
+        if !used_tap_names.contains(&candidate) {
+            return Ok(candidate);
+        }
+    }
+    
+    Err(Error::Other("Could not generate a unique TAP device name after multiple attempts".to_string()))
+}
+
 pub async fn setup_networking(
     _config: &Config,
     name: &str,

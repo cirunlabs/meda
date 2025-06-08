@@ -218,9 +218,8 @@ pub async fn create(
 
     // Generate network config with a unique subnet
     let subnet = crate::network::generate_unique_subnet(config).await?;
-    // Truncate VM name for tap device to avoid ifname length limits (15 chars max)
-    let tap_suffix = if name.len() > 10 { &name[..10] } else { name };
-    let tap_name = format!("tap-{}", tap_suffix);
+    // Generate unique TAP device name
+    let tap_name = crate::network::generate_unique_tap_name(config, name).await?;
 
     // Store network config
     write_string_to_file(&vm_dir.join("subnet"), &subnet)?;
