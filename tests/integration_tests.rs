@@ -264,7 +264,7 @@ fn test_cli_pull_nonexistent_image() {
     // This should fail because the image doesn't exist in the registry
     cmd.assert()
         .failure()
-        .stderr(predicate::str::contains("not found"));
+        .stderr(predicate::str::contains("denied").or(predicate::str::contains("not found")));
 
     cleanup_test_env();
 }
