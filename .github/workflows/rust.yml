@@ -23,6 +23,8 @@ jobs:
         sudo apt-get install sshpass
     - name: Give the runner user rw access to /dev/kvm
       run: sudo setfacl -m u:${USER}:rw /dev/kvm
+    - name: Run Test
+      run: cargo test
     - name: List VMs
       run: RUST_LOG=info cargo run -- list
     - name: Create VM
