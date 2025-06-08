@@ -10,10 +10,12 @@ pub struct Config {
     pub fw_url: String,
     pub ch_url: String,
     pub cr_url: String,
+    pub oras_url: String,
     pub base_raw: PathBuf,
     pub fw_bin: PathBuf,
     pub ch_bin: PathBuf,
     pub cr_bin: PathBuf,
+    pub oras_bin: PathBuf,
     pub cpus: usize,
     pub mem: String,
     pub disk_size: String,
@@ -38,11 +40,13 @@ impl Config {
         let fw_url = "https://github.com/cloud-hypervisor/rust-hypervisor-firmware/releases/latest/download/hypervisor-fw".to_string();
         let ch_url = "https://github.com/cloud-hypervisor/cloud-hypervisor/releases/latest/download/cloud-hypervisor-static".to_string();
         let cr_url = "https://github.com/cloud-hypervisor/cloud-hypervisor/releases/latest/download/ch-remote-static".to_string();
+        let oras_url = "https://github.com/oras-project/oras/releases/download/v1.2.3/oras_1.2.3_linux_amd64.tar.gz".to_string();
 
         let base_raw = asset_dir.join("ubuntu-base.raw");
         let fw_bin = asset_dir.join("hypervisor-fw");
         let ch_bin = asset_dir.join("cloud-hypervisor");
         let cr_bin = asset_dir.join("ch-remote");
+        let oras_bin = asset_dir.join("oras");
 
         let cpus = env::var("MEDA_CPUS")
             .map(|v| v.parse().unwrap_or(2))
@@ -59,10 +63,12 @@ impl Config {
             fw_url,
             ch_url,
             cr_url,
+            oras_url,
             base_raw,
             fw_bin,
             ch_bin,
             cr_bin,
+            oras_bin,
             cpus,
             mem,
             disk_size,

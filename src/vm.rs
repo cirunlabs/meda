@@ -109,6 +109,19 @@ pub async fn bootstrap(config: &Config) -> Result<()> {
         fs::set_permissions(&config.cr_bin, perms)?;
     }
 
+    // Download ORAS if needed
+    if !config.oras_bin.exists() {
+        info!("Downloading ORAS");
+        let temp_tar = config.asset_dir.join("oras.tar.gz");
+        download_file(&config.oras_url, &temp_tar).await?;
+        
+        // Extract ORAS binary from tar.gz
+        extract_oras_binary(&temp_tar, &config.oras_bin)?;
+        
+        // Remove temporary tar file
+        fs::remove_file(&temp_tar).ok();
+    }
+
     // Ensure other dependencies
     ensure_dependency("genisoimage", "genisoimage")?;
 
@@ -152,6 +165,19 @@ pub async fn bootstrap_binaries_only(config: &Config) -> Result<()> {
         let mut perms = fs::metadata(&config.cr_bin)?.permissions();
         perms.set_mode(0o755);
         fs::set_permissions(&config.cr_bin, perms)?;
+    }
+
+    // Download ORAS if needed
+    if !config.oras_bin.exists() {
+        info!("Downloading ORAS");
+        let temp_tar = config.asset_dir.join("oras.tar.gz");
+        download_file(&config.oras_url, &temp_tar).await?;
+        
+        // Extract ORAS binary from tar.gz
+        extract_oras_binary(&temp_tar, &config.oras_bin)?;
+        
+        // Remove temporary tar file
+        fs::remove_file(&temp_tar).ok();
     }
 
     // Ensure other dependencies
@@ -256,7 +282,10 @@ ethernets:
 
     // Create cloud-init ISO
     let ci_iso = vm_dir.join("ci.iso");
-    run_command(
+    if !json {
+        info!("Creating cloud-init configuration");
+    }
+    crate::util::run_command_quietly(
         "genisoimage",
         &[
             "-output",
@@ -690,7 +719,7 @@ pub fn check_vm_running(config: &Config, name: &str) -> Result<bool> {
     Ok(false)
 }
 
-fn get_vm_ip(config: &Config, name: &str) -> Result<String> {
+pub fn get_vm_ip(config: &Config, name: &str) -> Result<String> {
     let vm_dir = config.vm_dir(name);
     let subnet_file = vm_dir.join("subnet");
 
@@ -758,6 +787,36 @@ fn get_vm_disk_size(config: &Config, name: &str) -> Result<String> {
     }
 
     Ok(config.disk_size.clone())
+}
+
+fn extract_oras_binary(tar_path: &std::path::Path, dest_path: &std::path::Path) -> Result<()> {
+    use std::io::Read;
+    
+    let tar_file = fs::File::open(tar_path)?;
+    let tar = flate2::read::GzDecoder::new(tar_file);
+    let mut archive = tar::Archive::new(tar);
+    
+    for entry in archive.entries()? {
+        let mut entry = entry?;
+        let path = entry.path()?;
+        
+        // Look for the oras binary (it should be just "oras" in the archive)
+        if path.file_name() == Some(std::ffi::OsStr::new("oras")) {
+            let mut buffer = Vec::new();
+            entry.read_to_end(&mut buffer)?;
+            
+            fs::write(dest_path, buffer)?;
+            
+            // Make executable
+            let mut perms = fs::metadata(dest_path)?.permissions();
+            perms.set_mode(0o755);
+            fs::set_permissions(dest_path, perms)?;
+            
+            return Ok(());
+        }
+    }
+    
+    Err(Error::Other("ORAS binary not found in tar archive".to_string()))
 }
 
 #[cfg(test)]

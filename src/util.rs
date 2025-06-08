@@ -39,6 +39,28 @@ pub fn run_command_with_output(program: &str, args: &[&str]) -> Result<Output> {
         .map_err(|e| Error::CommandFailed(format!("{} {}: {}", program, args.join(" "), e)))
 }
 
+pub fn run_command_quietly(program: &str, args: &[&str]) -> Result<()> {
+    debug!("Running command quietly: {} {}", program, args.join(" "));
+
+    let output = Command::new(program)
+        .args(args)
+        .output()
+        .map_err(|e| Error::CommandFailed(format!("{} {}: {}", program, args.join(" "), e)))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(Error::CommandFailed(format!(
+            "{} {} failed with exit code: {:?}\nError output: {}",
+            program,
+            args.join(" "),
+            output.status.code(),
+            stderr
+        )));
+    }
+
+    Ok(())
+}
+
 pub async fn download_file(url: &str, dest: &Path) -> Result<()> {
     debug!("Downloading {} to {}", url, dest.display());
 

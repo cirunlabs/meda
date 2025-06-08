@@ -242,7 +242,7 @@ pub async fn pull(
     }
 
     // Ensure ORAS is available
-    let oras_path = ensure_oras_available().await?;
+    let oras_path = ensure_oras_available(config).await?;
 
     // Create temporary directory for downloaded artifacts
     let temp_dir = std::env::temp_dir().join(format!(
@@ -505,7 +505,7 @@ pub async fn push(
     }
 
     // Push to OCI registry
-    match push_to_oci_registry(&source_dir, &manifest, &target_ref, &github_token, json).await {
+    match push_to_oci_registry(config, &source_dir, &manifest, &target_ref, &github_token, json).await {
         Ok(_) => {
             let message = format!("Successfully pushed image {} to {}", name, target_ref.url());
             if json {
@@ -537,6 +537,7 @@ pub async fn push(
 
 /// Push image artifacts to OCI registry using ORAS
 async fn push_to_oci_registry(
+    config: &Config,
     source_dir: &PathBuf,
     manifest: &ImageManifest,
     target_ref: &ImageRef,
@@ -548,7 +549,7 @@ async fn push_to_oci_registry(
     }
 
     // Ensure ORAS is available
-    let oras_path = ensure_oras_available().await?;
+    let oras_path = ensure_oras_available(config).await?;
 
     // Target image reference
     let image_ref_str = format!(
@@ -656,18 +657,12 @@ async fn push_to_oci_registry(
 }
 
 /// Ensure ORAS binary is available, using existing one if present
-async fn ensure_oras_available() -> Result<PathBuf> {
-    // Check for existing ORAS binary in current directory
-    let oras_path = std::env::current_dir()?.join("oras");
-
-    if oras_path.exists() {
-        return Ok(oras_path);
-    }
-
-    // If not found, return error asking user to download it
-    Err(Error::Other(
-        "ORAS binary not found. Please download it first.".to_string(),
-    ))
+async fn ensure_oras_available(config: &Config) -> Result<PathBuf> {
+    // Bootstrap binaries which will download ORAS if needed
+    crate::vm::bootstrap_binaries_only(config).await?;
+    
+    // Return the path to the ORAS binary
+    Ok(config.oras_bin.clone())
 }
 
 /// Convert ORAS downloaded artifacts to Meda image format
@@ -1322,7 +1317,7 @@ pub async fn run_from_image(
     let image_ref = ImageRef::parse(image, default_registry, default_org)?;
 
     if !json {
-        info!("Running VM from image: {}", image_ref.url());
+        info!("🚀 Running VM from image: {}", image_ref.url());
     }
 
     let image_dir = image_ref.local_dir(config);
@@ -1356,7 +1351,11 @@ pub async fn run_from_image(
     }
 
     if !json {
-        info!("Creating VM '{}' from image '{}'", vm_name, image_ref.url());
+        info!(
+            "🔧 Creating VM '{}' from image '{}'",
+            vm_name,
+            image_ref.url()
+        );
     }
 
     // Bootstrap only the hypervisor binaries (we already have the image)
@@ -1372,7 +1371,7 @@ pub async fn run_from_image(
 
         if source_image.exists() {
             if !json {
-                info!("Copying base image to VM directory");
+                info!("📦 Copying base image to VM directory");
             }
             fs::copy(&source_image, &vm_rootfs)?;
         } else {
@@ -1477,7 +1476,10 @@ ethernets:
 
     // Create cloud-init ISO
     let ci_iso = vm_dir.join("ci.iso");
-    crate::util::run_command(
+    if !json {
+        info!("Creating cloud-init configuration");
+    }
+    crate::util::run_command_quietly(
         "genisoimage",
         &[
             "-output",
@@ -1492,7 +1494,7 @@ ethernets:
 
     // Setup networking
     if !json {
-        info!("Setting up host networking");
+        info!("🌐 Setting up host networking");
     }
     crate::network::setup_networking(config, vm_name, &tap_name, &subnet).await?;
 
@@ -1568,7 +1570,15 @@ fi
         };
         println!("{}", serde_json::to_string_pretty(&result)?);
     } else {
-        info!("{}", message);
+        info!("✅ {}", message);
+
+        if !no_start {
+            // Show useful information about the VM
+            let ip = crate::vm::get_vm_ip(config, vm_name).unwrap_or_else(|_| "N/A".to_string());
+            info!("💡 VM IP address: {}", ip);
+            info!("💡 Use 'meda stop {}' to stop the VM", vm_name);
+            info!("💡 Use 'meda delete {}' to remove the VM", vm_name);
+        }
     }
 
     Ok(())
