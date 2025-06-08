@@ -23,32 +23,34 @@ impl Config {
     pub fn new() -> Result<Self> {
         let home = dirs::home_dir().ok_or_else(|| Error::HomeDirNotFound)?;
         let ch_home = home.join(".meda");
-        
+
         let asset_dir = env::var("MEDA_ASSET_DIR")
             .map(PathBuf::from)
             .unwrap_or_else(|_| ch_home.join("assets"));
-            
+
         let vm_root = env::var("MEDA_VM_DIR")
             .map(PathBuf::from)
             .unwrap_or_else(|_| ch_home.join("vms"));
-            
-        let os_url = "https://cloud-images.ubuntu.com/jammy/current/jammy-server-cloudimg-amd64.img".to_string();
+
+        let os_url =
+            "https://cloud-images.ubuntu.com/jammy/current/jammy-server-cloudimg-amd64.img"
+                .to_string();
         let fw_url = "https://github.com/cloud-hypervisor/rust-hypervisor-firmware/releases/latest/download/hypervisor-fw".to_string();
         let ch_url = "https://github.com/cloud-hypervisor/cloud-hypervisor/releases/latest/download/cloud-hypervisor-static".to_string();
         let cr_url = "https://github.com/cloud-hypervisor/cloud-hypervisor/releases/latest/download/ch-remote-static".to_string();
-        
+
         let base_raw = asset_dir.join("ubuntu-base.raw");
         let fw_bin = asset_dir.join("hypervisor-fw");
         let ch_bin = asset_dir.join("cloud-hypervisor");
         let cr_bin = asset_dir.join("ch-remote");
-        
+
         let cpus = env::var("MEDA_CPUS")
             .map(|v| v.parse().unwrap_or(2))
             .unwrap_or(2);
-            
+
         let mem = env::var("MEDA_MEM").unwrap_or_else(|_| "1024M".to_string());
         let disk_size = env::var("MEDA_DISK_SIZE").unwrap_or_else(|_| "10G".to_string());
-        
+
         Ok(Self {
             ch_home,
             asset_dir,
@@ -66,11 +68,11 @@ impl Config {
             disk_size,
         })
     }
-    
+
     pub fn vm_dir(&self, name: &str) -> PathBuf {
         self.vm_root.join(name)
     }
-    
+
     pub fn ensure_dirs(&self) -> Result<()> {
         std::fs::create_dir_all(&self.ch_home)?;
         std::fs::create_dir_all(&self.asset_dir)?;
@@ -102,7 +104,7 @@ mod tests {
         env::remove_var("MEDA_DISK_SIZE");
 
         let config = Config::new().unwrap();
-        
+
         assert!(config.ch_home.ends_with(".meda"));
         assert!(config.asset_dir.ends_with("assets"));
         assert!(config.vm_root.ends_with("vms"));
@@ -111,11 +113,21 @@ mod tests {
         assert_eq!(config.disk_size, "10G");
 
         // Restore env vars
-        if let Some(val) = saved_asset_dir { env::set_var("MEDA_ASSET_DIR", val); }
-        if let Some(val) = saved_vm_dir { env::set_var("MEDA_VM_DIR", val); }
-        if let Some(val) = saved_cpus { env::set_var("MEDA_CPUS", val); }
-        if let Some(val) = saved_mem { env::set_var("MEDA_MEM", val); }
-        if let Some(val) = saved_disk_size { env::set_var("MEDA_DISK_SIZE", val); }
+        if let Some(val) = saved_asset_dir {
+            env::set_var("MEDA_ASSET_DIR", val);
+        }
+        if let Some(val) = saved_vm_dir {
+            env::set_var("MEDA_VM_DIR", val);
+        }
+        if let Some(val) = saved_cpus {
+            env::set_var("MEDA_CPUS", val);
+        }
+        if let Some(val) = saved_mem {
+            env::set_var("MEDA_MEM", val);
+        }
+        if let Some(val) = saved_disk_size {
+            env::set_var("MEDA_DISK_SIZE", val);
+        }
     }
 
     #[test]
@@ -131,7 +143,7 @@ mod tests {
         env::set_var("MEDA_DISK_SIZE", "20G");
 
         let config = Config::new().unwrap();
-        
+
         assert_eq!(config.asset_dir, asset_dir);
         assert_eq!(config.vm_root, vm_dir);
         assert_eq!(config.cpus, 4);
@@ -164,7 +176,7 @@ mod tests {
 
         let config = Config::new().unwrap();
         config.ensure_dirs().unwrap();
-        
+
         assert!(config.ch_home.exists());
         assert!(config.asset_dir.exists());
         assert!(config.vm_root.exists());

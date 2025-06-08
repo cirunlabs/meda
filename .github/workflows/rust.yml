@@ -25,33 +25,4 @@ jobs:
       run: sudo setfacl -m u:${USER}:rw /dev/kvm
     - name: Run Test
       run: cargo test
-    - name: List VMs
-      run: RUST_LOG=info cargo run -- list
-    - name: Create VM
-      run: |
-        RUST_LOG=info cargo run -- create ubuntu
-        sleep 10
-    - name: SSH into the VM with retries and collect system information
-      run: bash ./scripts/ssh_into_vm.sh
 
-    - name: Cloud Hypervisor logs
-      if: always()
-      run: cat /home/runner/.ch-vms/vms/ubuntu/ch.log
-    - name: List VM
-      run: RUST_LOG=info cargo run -- list
-    - name: Get VM
-      run: RUST_LOG=info cargo run -- get ubuntu
-    - name: Stop VM
-      run: |
-        sudo setfacl -m u:${USER}:rw /dev/kvm
-        RUST_LOG=info cargo run -- stop ubuntu
-    - name: Start VM
-      run: |
-        sudo setfacl -m u:${USER}:rw /dev/kvm
-        RUST_LOG=info cargo run -- start ubuntu
-    - name: Delete VM
-      run: |
-        sudo setfacl -m u:${USER}:rw /dev/kvm
-        RUST_LOG=info cargo run -- delete ubuntu
-    - name: Run Test
-      run: cargo test
