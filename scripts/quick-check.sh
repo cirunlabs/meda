@@ -53,6 +53,23 @@ else
     echo -e "${GREEN}✅ No trailing whitespace found${NC}"
 fi
 
+# Check line endings
+echo "📄 Checking line endings..."
+if command -v file &> /dev/null; then
+    if file src/*.rs | grep -E -v '(ASCII text|UTF-8 Unicode text|Unicode text, UTF-8 text|C source, ASCII text)$'; then
+        echo -e "${RED}❌ Found non-text files or binary content!${NC}"
+        exit 1
+    elif grep -l $'\r$' src/*.rs 2>/dev/null; then
+        echo -e "${RED}❌ Found Windows line endings (CRLF)!${NC}"
+        exit 1
+    else
+        echo -e "${GREEN}✅ All files have proper line endings${NC}"
+    fi
+else
+    echo -e "${YELLOW}⚠️  file command not available, skipping line ending check${NC}"
+fi
+
 echo
 echo -e "${GREEN}⚡ Quick quality checks passed!${NC}"
-echo "Run ./scripts/check-quality.sh for full checks including integration tests."
+echo "Run ./scripts/check-quality.sh for additional security/dependency checks."
+echo "Run ./scripts/check-quality.sh --with-integration for full integration tests."

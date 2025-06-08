@@ -89,11 +89,22 @@ jobs:
       - name: Check for mixed line endings
         run: |
           echo "Checking for mixed line endings..."
-          if file src/*.rs | grep -v 'UTF-8 Unicode text$'; then
-            echo "Found non-UTF8 files or mixed line endings!"
+          # Check that all Rust files are valid text files (ASCII is valid UTF-8)
+          # Note: file command might detect some files as "C source, ASCII text" which is fine
+          if file src/*.rs | grep -E -v '(ASCII text|UTF-8 Unicode text|Unicode text, UTF-8 text|C source, ASCII text)$'; then
+            echo "Found non-text files or binary content!"
+            file src/*.rs
             exit 1
           else
-            echo "All files have consistent UTF-8 encoding"
+            echo "All files are valid text files"
+          fi
+          
+          # Check for Windows line endings (CRLF)
+          if grep -l $'\r$' src/*.rs 2>/dev/null; then
+            echo "Found Windows line endings (CRLF) in Rust files!"
+            exit 1
+          else
+            echo "All files use Unix line endings (LF)"
           fi
 
   spell-check:

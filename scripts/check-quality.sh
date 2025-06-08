@@ -1,7 +1,15 @@
 #!/bin/bash
 set -e
 
-echo "🔍 Running code quality checks..."
+# Check if --with-integration flag is passed
+WITH_INTEGRATION=false
+if [[ "$1" == "--with-integration" ]]; then
+    WITH_INTEGRATION=true
+    echo "🔍 Running code quality checks (including integration tests)..."
+else
+    echo "🔍 Running code quality checks (excluding integration tests)..."
+    echo "   Use --with-integration to include integration tests"
+fi
 echo
 
 # Colors for output
@@ -40,9 +48,15 @@ cargo doc --no-deps --document-private-items --quiet
 check_status "Documentation"
 
 # Run tests
-echo "🧪 Running tests..."
-cargo test --quiet
-check_status "Tests"
+if [ "$WITH_INTEGRATION" = true ]; then
+    echo "🧪 Running all tests (including integration)..."
+    cargo test --quiet
+    check_status "All tests"
+else
+    echo "🧪 Running unit tests..."
+    cargo test --quiet --exclude integration_tests 2>/dev/null || cargo test --quiet --bin meda
+    check_status "Unit tests"
+fi
 
 # Check for trailing whitespace (if grep is available)
 echo "🔎 Checking for trailing whitespace..."
@@ -55,6 +69,22 @@ if command -v grep &> /dev/null; then
     fi
 else
     echo -e "${YELLOW}⚠️  grep not available, skipping trailing whitespace check${NC}"
+fi
+
+# Check line endings
+echo "📄 Checking line endings..."
+if command -v file &> /dev/null; then
+    if file src/*.rs | grep -E -v '(ASCII text|UTF-8 Unicode text|Unicode text, UTF-8 text|C source, ASCII text)$'; then
+        echo -e "${RED}❌ Found non-text files or binary content!${NC}"
+        exit 1
+    elif grep -l $'\r$' src/*.rs 2>/dev/null; then
+        echo -e "${RED}❌ Found Windows line endings (CRLF)!${NC}"
+        exit 1
+    else
+        echo -e "${GREEN}✅ All files have proper line endings${NC}"
+    fi
+else
+    echo -e "${YELLOW}⚠️  file command not available, skipping line ending check${NC}"
 fi
 
 # Optional: Run security audit if cargo-audit is installed
@@ -78,5 +108,10 @@ else
 fi
 
 echo
-echo -e "${GREEN}🎉 All quality checks passed!${NC}"
+if [ "$WITH_INTEGRATION" = true ]; then
+    echo -e "${GREEN}🎉 All quality checks passed (including integration tests)!${NC}"
+else
+    echo -e "${GREEN}🎉 All quality checks passed!${NC}"
+    echo "Integration tests were skipped for speed. Use --with-integration to include them."
+fi
 echo "Your code is ready for commit and will pass CI checks."

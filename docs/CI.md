@@ -35,7 +35,9 @@ Comprehensive code quality checks that run on every push and pull request.
 #### Formatting Check (`format-check`)
 - **Rust formatting**: Enforces consistent code style with `rustfmt`
 - **Trailing whitespace**: Detects and fails on trailing whitespace
-- **Line endings**: Ensures consistent UTF-8 encoding
+- **Line endings**: Ensures proper Unix line endings (LF) and valid text encoding
+  - Accepts ASCII text, UTF-8 text, and files detected as "C source, ASCII text"
+  - Rejects Windows line endings (CRLF) and binary content
 
 #### Spell Check (`spell-check`)
 - **Comment spelling**: Checks spelling in Rust code comments
@@ -123,8 +125,12 @@ cargo tarpaulin --out html --output-dir ./coverage
 
 1. **Clippy warnings**: Fix all warnings or use `#[allow(...)]` for intentional cases
 2. **Format issues**: Run `cargo fmt` locally
-3. **Test failures**: Ensure tests pass locally with system dependencies installed
-4. **Cache issues**: Clear cache by updating `Cargo.lock` or changing cache keys
+3. **Line ending issues**: 
+   - Convert Windows line endings: `dos2unix src/*.rs`
+   - Check encoding: `file src/*.rs` (should show ASCII or UTF-8 text)
+   - Files detected as "C source, ASCII text" are acceptable for Rust files
+4. **Test failures**: Ensure tests pass locally with system dependencies installed
+5. **Cache issues**: Clear cache by updating `Cargo.lock` or changing cache keys
 
 ### Performance
 
