@@ -1,11 +1,32 @@
 #!/bin/bash
 set -e
 
-# Check if --with-integration flag is passed
+# Check command line arguments
 WITH_INTEGRATION=false
 if [[ "$1" == "--with-integration" ]]; then
     WITH_INTEGRATION=true
     echo "🔍 Running code quality checks (including integration tests)..."
+elif [[ "$1" == "--help" || "$1" == "-h" ]]; then
+    echo "Code Quality Check Script"
+    echo ""
+    echo "Usage: $0 [OPTIONS]"
+    echo ""
+    echo "Options:"
+    echo "  --with-integration    Include slow integration tests"
+    echo "  --help, -h           Show this help message"
+    echo ""
+    echo "This script runs comprehensive code quality checks including:"
+    echo "- Code formatting (rustfmt)"
+    echo "- Linting (clippy)"
+    echo "- Documentation builds"
+    echo "- Unit tests (integration tests with --with-integration)"
+    echo "- Security audit (if cargo-audit is installed)"
+    echo "- Dependency analysis (if cargo-machete is installed)"
+    exit 0
+elif [[ -n "$1" ]]; then
+    echo "Unknown option: $1"
+    echo "Use --help for usage information"
+    exit 1
 else
     echo "🔍 Running code quality checks (excluding integration tests)..."
     echo "   Use --with-integration to include integration tests"

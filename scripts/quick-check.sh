@@ -1,6 +1,31 @@
 #!/bin/bash
 set -e
 
+# Check command line arguments
+if [[ "$1" == "--help" || "$1" == "-h" ]]; then
+    echo "Quick Code Quality Check Script"
+    echo ""
+    echo "Usage: $0 [OPTIONS]"
+    echo ""
+    echo "Options:"
+    echo "  --help, -h           Show this help message"
+    echo ""
+    echo "This script runs fast code quality checks including:"
+    echo "- Code formatting (rustfmt)"
+    echo "- Linting (clippy)"
+    echo "- Documentation builds"
+    echo "- Unit tests only (fast)"
+    echo "- Whitespace and line ending checks"
+    echo ""
+    echo "For additional security and dependency checks, use:"
+    echo "  ./scripts/check-quality.sh"
+    exit 0
+elif [[ -n "$1" ]]; then
+    echo "Unknown option: $1"
+    echo "Use --help for usage information"
+    exit 1
+fi
+
 echo "⚡ Running quick code quality checks..."
 echo
 

@@ -76,15 +76,16 @@ Fast pre-commit checks suitable for frequent use:
 ```
 - Formatting, compilation, linting, documentation
 - Unit tests only (faster)
-- Whitespace checks
+- Whitespace and line ending checks
 
-### Full Quality Script (`scripts/check-quality.sh`)
+### Quality Check Script (`scripts/check-quality.sh`)
 Comprehensive checks before pushing:
 ```bash
-./scripts/check-quality.sh
+./scripts/check-quality.sh                    # Unit tests only (faster)
+./scripts/check-quality.sh --with-integration # Include integration tests
 ```
-- All quick checks plus integration tests
-- Optional security audit and dependency checks
+- All quick checks plus security audit and dependency checks
+- Unit tests by default, integration tests with flag
 - Colored output with clear status reporting
 
 ### Manual Commands
