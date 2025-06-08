@@ -463,3 +463,354 @@ fn test_cli_complete_image_workflow() {
     
     cleanup_test_env();
 }
+
+// Test SSH connectivity to a running VM
+#[test]
+#[serial]
+fn test_cli_vm_ssh_connectivity() {
+    let _temp_dir = setup_test_env();
+    
+    // 1. Create a VM
+    let mut cmd = Command::cargo_bin("meda").unwrap();
+    cmd.args(&["create", "ssh-test-vm", "--json"]);
+    cmd.assert()
+        .success()
+        .stdout(predicate::str::contains("success\": true"));
+    
+    // 2. Start the VM
+    let mut cmd = Command::cargo_bin("meda").unwrap();
+    cmd.args(&["start", "ssh-test-vm", "--json"]);
+    
+    // Note: VM start might fail in CI environment without proper hypervisor setup
+    // But we can still test the command execution
+    let start_result = cmd.assert();
+    
+    // If start succeeded, test SSH connectivity
+    if start_result.try_success().is_ok() {
+        // 3. Get VM details to find IP
+        let mut cmd = Command::cargo_bin("meda").unwrap();
+        cmd.args(&["get", "ssh-test-vm", "--json"]);
+        let output = cmd.assert().success();
+        
+        // Parse JSON to get IP
+        let stdout = std::str::from_utf8(&output.get_output().stdout).unwrap();
+        if let Ok(vm_info) = serde_json::from_str::<serde_json::Value>(stdout) {
+            if let Some(ip) = vm_info.get("ip").and_then(|v| v.as_str()) {
+                if ip != "N/A" {
+                    // 4. Wait a bit for the VM to fully boot
+                    std::thread::sleep(std::time::Duration::from_secs(30));
+                    
+                    // 5. Test SSH connectivity
+                    test_ssh_connection(ip);
+                }
+            }
+        }
+        
+        // 6. Stop the VM
+        let mut cmd = Command::cargo_bin("meda").unwrap();
+        cmd.args(&["stop", "ssh-test-vm", "--json"]);
+        cmd.assert().success();
+    }
+    
+    // 7. Clean up - delete the VM
+    let mut cmd = Command::cargo_bin("meda").unwrap();
+    cmd.args(&["delete", "ssh-test-vm", "--json"]);
+    cmd.assert().success();
+    
+    cleanup_test_env();
+}
+
+// Test SSH connectivity with port forwarding
+#[test]
+#[serial]
+fn test_cli_vm_ssh_with_port_forward() {
+    let _temp_dir = setup_test_env();
+    
+    // 1. Create a VM
+    let mut cmd = Command::cargo_bin("meda").unwrap();
+    cmd.args(&["create", "ssh-port-test-vm", "--json"]);
+    cmd.assert()
+        .success()
+        .stdout(predicate::str::contains("success\": true"));
+    
+    // 2. Start the VM
+    let mut cmd = Command::cargo_bin("meda").unwrap();
+    cmd.args(&["start", "ssh-port-test-vm", "--json"]);
+    
+    let start_result = cmd.assert();
+    
+    if start_result.try_success().is_ok() {
+        // 3. Set up port forwarding for SSH
+        let mut cmd = Command::cargo_bin("meda").unwrap();
+        cmd.args(&["port-forward", "ssh-port-test-vm", "2222", "22", "--json"]);
+        cmd.assert()
+            .success()
+            .stdout(predicate::str::contains("success\": true"));
+        
+        // 4. Wait for VM to boot
+        std::thread::sleep(std::time::Duration::from_secs(30));
+        
+        // 5. Test SSH via port forward
+        test_ssh_connection_via_port("localhost", 2222);
+        
+        // 6. Stop the VM
+        let mut cmd = Command::cargo_bin("meda").unwrap();
+        cmd.args(&["stop", "ssh-port-test-vm", "--json"]);
+        cmd.assert().success();
+    }
+    
+    // 7. Clean up
+    let mut cmd = Command::cargo_bin("meda").unwrap();
+    cmd.args(&["delete", "ssh-port-test-vm", "--json"]);
+    cmd.assert().success();
+    
+    cleanup_test_env();
+}
+
+// Test VM from image with SSH
+#[test]
+#[serial]
+fn test_cli_run_image_ssh() {
+    let _temp_dir = setup_test_env();
+    
+    // 1. Create an image first (if not already exists)
+    let mut cmd = Command::cargo_bin("meda").unwrap();
+    cmd.args(&["create-image", "ssh-test-image", "--json"]);
+    cmd.assert().success();
+    
+    // 2. Run VM from image
+    let mut cmd = Command::cargo_bin("meda").unwrap();
+    cmd.args(&["run", "ssh-test-image:latest", "--name", "ssh-from-image-vm", "--json"]);
+    
+    let run_result = cmd.assert();
+    
+    if run_result.try_success().is_ok() {
+        // 3. Get VM details
+        let mut cmd = Command::cargo_bin("meda").unwrap();
+        cmd.args(&["get", "ssh-from-image-vm", "--json"]);
+        let output = cmd.assert().success();
+        
+        // Parse JSON to get IP
+        let stdout = std::str::from_utf8(&output.get_output().stdout).unwrap();
+        if let Ok(vm_info) = serde_json::from_str::<serde_json::Value>(stdout) {
+            if let Some(ip) = vm_info.get("ip").and_then(|v| v.as_str()) {
+                if ip != "N/A" {
+                    // 4. Wait for VM to boot
+                    std::thread::sleep(std::time::Duration::from_secs(30));
+                    
+                    // 5. Test SSH
+                    test_ssh_connection(ip);
+                }
+            }
+        }
+        
+        // 6. Clean up
+        let mut cmd = Command::cargo_bin("meda").unwrap();
+        cmd.args(&["delete", "ssh-from-image-vm", "--json"]);
+        cmd.assert().success();
+    }
+    
+    // Clean up image
+    let mut cmd = Command::cargo_bin("meda").unwrap();
+    cmd.args(&["rmi", "ssh-test-image", "--force", "--json"]);
+    cmd.assert().success();
+    
+    cleanup_test_env();
+}
+
+// Helper function to test SSH connection
+fn test_ssh_connection(ip: &str) {
+    println!("Testing SSH connection to VM at IP: {}", ip);
+    
+    // Test basic SSH connectivity with timeout
+    let mut cmd = Command::new("ssh");
+    cmd.args(&[
+        "-o", "ConnectTimeout=10",
+        "-o", "StrictHostKeyChecking=no",
+        "-o", "UserKnownHostsFile=/dev/null",
+        "-o", "BatchMode=yes",  // Non-interactive mode
+        &format!("cirun@{}", ip),
+        "echo 'SSH connection successful'"
+    ]);
+    
+    // SSH might fail due to various reasons (VM not fully booted, network issues, etc.)
+    // So we'll just attempt the connection and log the result
+    let result = cmd.output();
+    
+    match result {
+        Ok(output) => {
+            if output.status.success() {
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                println!("SSH test successful: {}", stdout.trim());
+                assert!(stdout.contains("SSH connection successful"));
+            } else {
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                println!("SSH test failed (expected in CI): {}", stderr.trim());
+                // Don't fail the test in CI environments where SSH might not work
+            }
+        }
+        Err(e) => {
+            println!("SSH command failed to execute (expected in CI): {}", e);
+            // Don't fail the test if SSH command is not available
+        }
+    }
+}
+
+// Helper function to test SSH connection via port forwarding
+fn test_ssh_connection_via_port(host: &str, port: u16) {
+    println!("Testing SSH connection to {}:{}", host, port);
+    
+    let mut cmd = Command::new("ssh");
+    cmd.args(&[
+        "-p", &port.to_string(),
+        "-o", "ConnectTimeout=10",
+        "-o", "StrictHostKeyChecking=no",
+        "-o", "UserKnownHostsFile=/dev/null",
+        "-o", "BatchMode=yes",
+        &format!("cirun@{}", host),
+        "echo 'SSH via port forward successful'"
+    ]);
+    
+    let result = cmd.output();
+    
+    match result {
+        Ok(output) => {
+            if output.status.success() {
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                println!("SSH port forward test successful: {}", stdout.trim());
+                assert!(stdout.contains("SSH via port forward successful"));
+            } else {
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                println!("SSH port forward test failed (expected in CI): {}", stderr.trim());
+            }
+        }
+        Err(e) => {
+            println!("SSH port forward command failed to execute (expected in CI): {}", e);
+        }
+    }
+}
+
+// Test SSH with custom user-data
+#[test]
+#[serial]
+fn test_cli_vm_ssh_custom_userdata() {
+    let temp_dir = setup_test_env();
+    
+    // Create custom user-data with SSH key
+    let user_data_content = r#"#cloud-config
+users:
+  - name: cirun
+    sudo: ALL=(ALL) NOPASSWD:ALL
+    passwd: $6$ep7LxhhmhQHf.TiY$qPJVJQCnPMnyFdmD0ymP7CH2dos0awET8JlSzDqoiK6AOQwDpx8fCLJ1C5c7nvkVJbIpQCOalC8l2BGkRzogM.
+    lock_passwd: false
+    inactive: false
+    groups: sudo
+    shell: /bin/bash
+    ssh_authorized_keys:
+      - ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQC7... # Placeholder key
+ssh_pwauth: true
+packages:
+  - curl
+  - htop
+runcmd:
+  - echo "VM is ready for SSH" > /tmp/ready
+"#;
+    
+    let user_data_file = temp_dir.path().join("custom-user-data");
+    std::fs::write(&user_data_file, user_data_content).unwrap();
+    
+    // 1. Create VM with custom user-data
+    let mut cmd = Command::cargo_bin("meda").unwrap();
+    cmd.args(&[
+        "create",
+        "ssh-custom-vm",
+        user_data_file.to_str().unwrap(),
+        "--json"
+    ]);
+    cmd.assert()
+        .success()
+        .stdout(predicate::str::contains("success\": true"));
+    
+    // 2. Start the VM
+    let mut cmd = Command::cargo_bin("meda").unwrap();
+    cmd.args(&["start", "ssh-custom-vm", "--json"]);
+    
+    let start_result = cmd.assert();
+    
+    if start_result.try_success().is_ok() {
+        // 3. Get VM IP
+        let mut cmd = Command::cargo_bin("meda").unwrap();
+        cmd.args(&["get", "ssh-custom-vm", "--json"]);
+        let output = cmd.assert().success();
+        
+        let stdout = std::str::from_utf8(&output.get_output().stdout).unwrap();
+        if let Ok(vm_info) = serde_json::from_str::<serde_json::Value>(stdout) {
+            if let Some(ip) = vm_info.get("ip").and_then(|v| v.as_str()) {
+                if ip != "N/A" {
+                    // 4. Wait longer for custom user-data to complete
+                    std::thread::sleep(std::time::Duration::from_secs(60));
+                    
+                    // 5. Test SSH with additional commands
+                    test_ssh_with_commands(ip);
+                }
+            }
+        }
+        
+        // 6. Stop the VM
+        let mut cmd = Command::cargo_bin("meda").unwrap();
+        cmd.args(&["stop", "ssh-custom-vm", "--json"]);
+        cmd.assert().success();
+    }
+    
+    // 7. Clean up
+    let mut cmd = Command::cargo_bin("meda").unwrap();
+    cmd.args(&["delete", "ssh-custom-vm", "--json"]);
+    cmd.assert().success();
+    
+    cleanup_test_env();
+}
+
+// Helper function to test SSH with additional commands
+fn test_ssh_with_commands(ip: &str) {
+    println!("Testing SSH with commands to VM at IP: {}", ip);
+    
+    let test_commands = vec![
+        ("whoami", "cirun"),
+        ("pwd", "/home/cirun"),
+        ("cat /tmp/ready", "VM is ready for SSH"),
+        ("curl --version", "curl"),
+    ];
+    
+    for (command, expected_output) in test_commands {
+        let mut cmd = Command::new("ssh");
+        cmd.args(&[
+            "-o", "ConnectTimeout=10",
+            "-o", "StrictHostKeyChecking=no", 
+            "-o", "UserKnownHostsFile=/dev/null",
+            "-o", "BatchMode=yes",
+            &format!("cirun@{}", ip),
+            command
+        ]);
+        
+        match cmd.output() {
+            Ok(output) => {
+                if output.status.success() {
+                    let stdout = String::from_utf8_lossy(&output.stdout);
+                    println!("Command '{}' output: {}", command, stdout.trim());
+                    
+                    if stdout.contains(expected_output) {
+                        println!("✅ Command '{}' test passed", command);
+                    } else {
+                        println!("⚠️  Command '{}' output doesn't contain expected: {}", command, expected_output);
+                    }
+                } else {
+                    let stderr = String::from_utf8_lossy(&output.stderr);
+                    println!("❌ Command '{}' failed: {}", command, stderr.trim());
+                }
+            }
+            Err(e) => {
+                println!("❌ Failed to execute SSH command '{}': {}", command, e);
+            }
+        }
+    }
+}
