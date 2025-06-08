@@ -26,19 +26,17 @@ pub async fn generate_unique_subnet(config: &Config) -> Result<String> {
     let mut used_subnets = Vec::new();
 
     if let Ok(entries) = fs::read_dir(&config.vm_root) {
-        for entry in entries {
-            if let Ok(entry) = entry {
-                let path = entry.path();
-                if path.is_dir() {
-                    let subnet_file = path.join("subnet");
-                    if subnet_file.exists() {
-                        if let Ok(subnet) = fs::read_to_string(subnet_file) {
-                            let subnet = subnet.trim();
-                            if subnet.starts_with("192.168.") {
-                                if let Some(octet_str) = subnet.strip_prefix("192.168.") {
-                                    if let Ok(octet) = octet_str.parse::<u8>() {
-                                        used_subnets.push(octet);
-                                    }
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                let subnet_file = path.join("subnet");
+                if subnet_file.exists() {
+                    if let Ok(subnet) = fs::read_to_string(subnet_file) {
+                        let subnet = subnet.trim();
+                        if subnet.starts_with("192.168.") {
+                            if let Some(octet_str) = subnet.strip_prefix("192.168.") {
+                                if let Ok(octet) = octet_str.parse::<u8>() {
+                                    used_subnets.push(octet);
                                 }
                             }
                         }
@@ -69,7 +67,7 @@ pub async fn generate_unique_subnet(config: &Config) -> Result<String> {
 pub async fn generate_unique_tap_name(config: &Config, vm_name: &str) -> Result<String> {
     // Get all existing TAP device names from VM directories
     let mut used_tap_names = Vec::new();
-    
+
     if let Ok(entries) = fs::read_dir(&config.vm_root) {
         for entry in entries.flatten() {
             let path = entry.path();
@@ -81,7 +79,7 @@ pub async fn generate_unique_tap_name(config: &Config, vm_name: &str) -> Result<
             }
         }
     }
-    
+
     // Also check currently active TAP devices on the system
     if let Ok(output) = run_command_with_output("ip", &["link", "show"]) {
         if output.status.success() {
@@ -99,20 +97,20 @@ pub async fn generate_unique_tap_name(config: &Config, vm_name: &str) -> Result<
             }
         }
     }
-    
+
     // Start with a truncated VM name (max 10 chars for tap- prefix)
     let base_name = if vm_name.len() > 8 {
         &vm_name[..8]
     } else {
         vm_name
     };
-    
+
     // Try the base name first
     let candidate = format!("tap-{}", base_name);
     if !used_tap_names.contains(&candidate) {
         return Ok(candidate);
     }
-    
+
     // If base name is taken, append numbers
     for i in 1..=999 {
         let candidate = format!("tap-{}-{}", base_name, i);
@@ -120,7 +118,7 @@ pub async fn generate_unique_tap_name(config: &Config, vm_name: &str) -> Result<
             return Ok(candidate);
         }
     }
-    
+
     // If all numeric suffixes are exhausted, use random suffix
     let mut rng = rand::thread_rng();
     for _ in 0..100 {
@@ -130,8 +128,10 @@ pub async fn generate_unique_tap_name(config: &Config, vm_name: &str) -> Result<
             return Ok(candidate);
         }
     }
-    
-    Err(Error::Other("Could not generate a unique TAP device name after multiple attempts".to_string()))
+
+    Err(Error::Other(
+        "Could not generate a unique TAP device name after multiple attempts".to_string(),
+    ))
 }
 
 pub async fn setup_networking(
@@ -422,7 +422,7 @@ mod tests {
     fn test_octet_range() {
         for _ in 0..1000 {
             let octet = generate_random_octet();
-            assert!(octet >= 16 && octet <= 215);
+            assert!((16..=215).contains(&octet));
         }
     }
 

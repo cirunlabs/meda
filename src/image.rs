@@ -8,7 +8,16 @@ use std::collections::HashMap;
 use std::env;
 use std::fs;
 use std::io::Write;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+
+#[derive(Default)]
+pub struct RunOptions<'a> {
+    pub vm_name: Option<&'a str>,
+    pub registry: Option<&'a str>,
+    pub org: Option<&'a str>,
+    pub user_data_path: Option<&'a str>,
+    pub no_start: bool,
+}
 
 #[derive(Serialize)]
 pub struct ImageInfo {
@@ -84,7 +93,7 @@ impl ImageRef {
         config
             .asset_dir
             .join("images")
-            .join(&self.registry.replace(".", "_"))
+            .join(self.registry.replace(".", "_"))
             .join(&self.org)
             .join(&self.name)
             .join(&self.tag)
@@ -92,7 +101,7 @@ impl ImageRef {
 }
 
 impl ImageManifest {
-    pub fn load(image_dir: &PathBuf) -> Result<Self> {
+    pub fn load(image_dir: &Path) -> Result<Self> {
         let manifest_path = image_dir.join("manifest.json");
         if !manifest_path.exists() {
             return Err(Error::ImageNotFound("manifest.json not found".to_string()));
@@ -103,7 +112,7 @@ impl ImageManifest {
         Ok(manifest)
     }
 
-    pub fn save(&self, image_dir: &PathBuf) -> Result<()> {
+    pub fn save(&self, image_dir: &Path) -> Result<()> {
         fs::create_dir_all(image_dir)?;
         let manifest_path = image_dir.join("manifest.json");
         let content = serde_json::to_string_pretty(self)?;
@@ -261,7 +270,7 @@ pub async fn pull(
 
     // Use ORAS to pull artifacts to temp directory
     let mut cmd = std::process::Command::new(&oras_path);
-    cmd.args(&[
+    cmd.args([
         "pull",
         &image_ref_str,
         "--output",
@@ -278,7 +287,7 @@ pub async fn pull(
 
     // Add authentication if available
     if let Some(ref token) = github_token {
-        cmd.args(&["--username", "token", "--password", token]);
+        cmd.args(["--username", "token", "--password", token]);
     }
 
     // Add progress flags
@@ -313,7 +322,10 @@ pub async fn pull(
     // If that fails, try scanning the assets images directory as a fallback
 
     // First try temp directory where ORAS might have downloaded files
-    if let Err(_) = convert_oras_artifacts_to_meda(&temp_dir, &image_dir, &image_ref, json).await {
+    if convert_oras_artifacts_to_meda(&temp_dir, &image_dir, &image_ref, json)
+        .await
+        .is_err()
+    {
         // Check if ORAS downloaded directly to the correct tag-based directory structure
         if image_dir.exists() {
             if !json {
@@ -338,7 +350,7 @@ pub async fn pull(
 
             let mut found_source_dir = None;
             for assets_base in search_dirs {
-                let registry_dir = assets_base.join(&image_ref.registry.replace(".", "_"));
+                let registry_dir = assets_base.join(image_ref.registry.replace(".", "_"));
                 let org_dir = registry_dir.join(&image_ref.org);
 
                 if !json {
@@ -505,7 +517,16 @@ pub async fn push(
     }
 
     // Push to OCI registry
-    match push_to_oci_registry(config, &source_dir, &manifest, &target_ref, &github_token, json).await {
+    match push_to_oci_registry(
+        config,
+        &source_dir,
+        &manifest,
+        &target_ref,
+        &github_token,
+        json,
+    )
+    .await
+    {
         Ok(_) => {
             let message = format!("Successfully pushed image {} to {}", name, target_ref.url());
             if json {
@@ -538,7 +559,7 @@ pub async fn push(
 /// Push image artifacts to OCI registry using ORAS
 async fn push_to_oci_registry(
     config: &Config,
-    source_dir: &PathBuf,
+    source_dir: &Path,
     manifest: &ImageManifest,
     target_ref: &ImageRef,
     github_token: &str,
@@ -582,7 +603,7 @@ async fn push_to_oci_registry(
 
     // Build ORAS push command with all artifacts
     let mut cmd = std::process::Command::new(&oras_path);
-    cmd.args(&[
+    cmd.args([
         "push",
         &image_ref_str,
         "--username",
@@ -617,16 +638,16 @@ async fn push_to_oci_registry(
 
     // Add manifest metadata as annotations
     for (key, value) in &manifest.metadata {
-        cmd.args(&["--annotation", &format!("meda.metadata.{}={}", key, value)]);
+        cmd.args(["--annotation", &format!("meda.metadata.{}={}", key, value)]);
     }
 
     // Add creation timestamp
-    cmd.args(&[
+    cmd.args([
         "--annotation",
         &format!("meda.created={}", manifest.created),
     ]);
-    cmd.args(&["--annotation", &format!("meda.name={}", manifest.name)]);
-    cmd.args(&["--annotation", &format!("meda.tag={}", manifest.tag)]);
+    cmd.args(["--annotation", &format!("meda.name={}", manifest.name)]);
+    cmd.args(["--annotation", &format!("meda.tag={}", manifest.tag)]);
 
     if !json {
         println!("🔄 Uploading artifacts with ORAS (this may take a while for large files)...");
@@ -660,15 +681,15 @@ async fn push_to_oci_registry(
 async fn ensure_oras_available(config: &Config) -> Result<PathBuf> {
     // Bootstrap binaries which will download ORAS if needed
     crate::vm::bootstrap_binaries_only(config).await?;
-    
+
     // Return the path to the ORAS binary
     Ok(config.oras_bin.clone())
 }
 
 /// Convert ORAS downloaded artifacts to Meda image format
 async fn convert_oras_artifacts_to_meda(
-    scan_dir: &PathBuf,
-    image_dir: &PathBuf,
+    scan_dir: &Path,
+    image_dir: &Path,
     image_ref: &ImageRef,
     json: bool,
 ) -> Result<()> {
@@ -695,10 +716,10 @@ async fn convert_oras_artifacts_to_meda(
     let mut total_size = 0u64;
 
     fn scan_directory(
-        dir: &PathBuf,
+        dir: &Path,
         artifacts: &mut HashMap<String, String>,
         total_size: &mut u64,
-        image_dir: &PathBuf,
+        image_dir: &Path,
         json: bool,
     ) -> Result<()> {
         for entry in fs::read_dir(dir)? {
@@ -773,10 +794,8 @@ async fn convert_oras_artifacts_to_meda(
                 scan_dir.display()
             );
             if let Ok(entries) = fs::read_dir(scan_dir) {
-                for entry in entries {
-                    if let Ok(entry) = entry {
-                        println!("DEBUG: Found in scan dir: {}", entry.path().display());
-                    }
+                for entry in entries.flatten() {
+                    println!("DEBUG: Found in scan dir: {}", entry.path().display());
                 }
             }
         }
@@ -837,7 +856,7 @@ async fn convert_oras_artifacts_to_meda(
 
 /// Create a manifest from files already in the correct tag-based directory
 async fn create_manifest_from_tag_directory(
-    image_dir: &PathBuf,
+    image_dir: &Path,
     image_ref: &ImageRef,
     json: bool,
 ) -> Result<()> {
@@ -853,43 +872,38 @@ async fn create_manifest_from_tag_directory(
 
     // Scan the image directory for known artifact files
     if let Ok(entries) = fs::read_dir(image_dir) {
-        for entry in entries {
-            if let Ok(entry) = entry {
-                let path = entry.path();
-                if path.is_file() {
-                    let file_name = path.file_name().unwrap().to_string_lossy();
-                    let size = fs::metadata(&path)?.len();
-                    total_size += size;
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_file() {
+                let file_name = path.file_name().unwrap().to_string_lossy();
+                let size = fs::metadata(&path)?.len();
+                total_size += size;
 
-                    // Determine artifact type from filename
-                    let artifact_type = if file_name.contains("base") || file_name.ends_with(".raw")
-                    {
-                        "base_image"
-                    } else if file_name.contains("hypervisor-fw") || file_name.contains("fw") {
-                        "firmware"
-                    } else if file_name.contains("cloud-hypervisor")
-                        && !file_name.contains("remote")
-                    {
-                        "hypervisor"
-                    } else if file_name.contains("ch-remote") {
-                        "ch_remote"
-                    } else if file_name.ends_with(".json") {
-                        continue; // Skip manifest files
-                    } else {
-                        // Use filename as artifact type
-                        &file_name.replace("-", "_").replace(".", "_")
-                    };
+                // Determine artifact type from filename
+                let artifact_type = if file_name.contains("base") || file_name.ends_with(".raw") {
+                    "base_image"
+                } else if file_name.contains("hypervisor-fw") || file_name.contains("fw") {
+                    "firmware"
+                } else if file_name.contains("cloud-hypervisor") && !file_name.contains("remote") {
+                    "hypervisor"
+                } else if file_name.contains("ch-remote") {
+                    "ch_remote"
+                } else if file_name.ends_with(".json") {
+                    continue; // Skip manifest files
+                } else {
+                    // Use filename as artifact type
+                    &file_name.replace("-", "_").replace(".", "_")
+                };
 
-                    artifacts.insert(artifact_type.to_string(), file_name.to_string());
+                artifacts.insert(artifact_type.to_string(), file_name.to_string());
 
-                    if !json {
-                        println!(
-                            "📁 Found artifact: {} → {} ({:.2} MB)",
-                            artifact_type,
-                            file_name,
-                            size as f64 / 1024.0 / 1024.0
-                        );
-                    }
+                if !json {
+                    println!(
+                        "📁 Found artifact: {} → {} ({:.2} MB)",
+                        artifact_type,
+                        file_name,
+                        size as f64 / 1024.0 / 1024.0
+                    );
                 }
             }
         }
@@ -1101,21 +1115,19 @@ pub async fn list(config: &Config, json: bool) -> Result<()> {
 
     if json {
         println!("{}", serde_json::to_string_pretty(&images)?);
+    } else if images.is_empty() {
+        info!("No images found");
     } else {
-        if images.is_empty() {
-            info!("No images found");
-        } else {
+        println!(
+            "{:<20} {:<10} {:<15} {:<12} {:<20}",
+            "NAME", "TAG", "REGISTRY", "SIZE", "CREATED"
+        );
+        println!("{}", "-".repeat(85));
+        for image in images {
             println!(
                 "{:<20} {:<10} {:<15} {:<12} {:<20}",
-                "NAME", "TAG", "REGISTRY", "SIZE", "CREATED"
+                image.name, image.tag, image.registry, image.size, image.created
             );
-            println!("{}", "-".repeat(85));
-            for image in images {
-                println!(
-                    "{:<20} {:<10} {:<15} {:<12} {:<20}",
-                    image.name, image.tag, image.registry, image.size, image.created
-                );
-            }
         }
     }
 
@@ -1185,7 +1197,7 @@ pub async fn prune(config: &Config, all: bool, force: bool, json: bool) -> Resul
     Ok(())
 }
 
-fn calculate_directory_size(dir: &PathBuf) -> Result<u64> {
+fn calculate_directory_size(dir: &Path) -> Result<u64> {
     let mut size = 0u64;
 
     for entry in fs::read_dir(dir)? {
@@ -1245,19 +1257,17 @@ pub async fn create_from_vm(
 
     // Copy other VM artifacts if they exist
     if let Ok(entries) = fs::read_dir(&vm_dir) {
-        for entry in entries {
-            if let Ok(entry) = entry {
-                let path = entry.path();
-                let file_name = path.file_name().unwrap().to_string_lossy();
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let file_name = path.file_name().unwrap().to_string_lossy();
 
-                match file_name.as_ref() {
-                    "user-data" | "meta-data" | "network-config" => {
-                        let dest = image_dir.join(&*file_name);
-                        fs::copy(&path, &dest)?;
-                        artifacts.insert(file_name.to_string(), file_name.to_string());
-                    }
-                    _ => {}
+            match file_name.as_ref() {
+                "user-data" | "meta-data" | "network-config" => {
+                    let dest = image_dir.join(&*file_name);
+                    fs::copy(&path, &dest)?;
+                    artifacts.insert(file_name.to_string(), file_name.to_string());
                 }
+                _ => {}
             }
         }
     }
@@ -1304,15 +1314,11 @@ pub async fn create_from_vm(
 pub async fn run_from_image(
     config: &Config,
     image: &str,
-    vm_name: Option<&str>,
-    registry: Option<&str>,
-    org: Option<&str>,
-    user_data_path: Option<&str>,
-    no_start: bool,
+    options: RunOptions<'_>,
     json: bool,
 ) -> Result<()> {
-    let default_registry = registry.unwrap_or("ghcr.io");
-    let default_org = org.unwrap_or("cirunlabs");
+    let default_registry = options.registry.unwrap_or("ghcr.io");
+    let default_org = options.org.unwrap_or("cirunlabs");
 
     let image_ref = ImageRef::parse(image, default_registry, default_org)?;
 
@@ -1342,7 +1348,7 @@ pub async fn run_from_image(
             .unwrap_or_default()
             .as_secs()
     );
-    let vm_name = vm_name.unwrap_or(&generated_name);
+    let vm_name = options.vm_name.unwrap_or(&generated_name);
 
     let vm_dir = config.vm_dir(vm_name);
 
@@ -1416,7 +1422,7 @@ pub async fn run_from_image(
     }
 
     // User data - use provided or default
-    if let Some(path) = user_data_path {
+    if let Some(path) = options.user_data_path {
         fs::copy(path, vm_dir.join("user-data"))?;
     } else if !vm_dir.join("user-data").exists() {
         let default_user_data = r#"#cloud-config
@@ -1542,7 +1548,7 @@ fi
     perms.set_mode(0o755);
     fs::set_permissions(&start_script_path, perms)?;
 
-    let message = if no_start {
+    let message = if options.no_start {
         format!(
             "Successfully created VM '{}' from image '{}' (not started)",
             vm_name,
@@ -1567,7 +1573,7 @@ fi
     } else {
         info!("✅ {}", message);
 
-        if !no_start {
+        if !options.no_start {
             // Show useful information about the VM
             let ip = crate::vm::get_vm_ip(config, vm_name).unwrap_or_else(|_| "N/A".to_string());
             info!("💡 VM IP address: {}", ip);
@@ -1686,10 +1692,10 @@ mod tests {
         };
 
         // Save manifest
-        manifest.save(&temp_dir.path().to_path_buf()).unwrap();
+        manifest.save(temp_dir.path()).unwrap();
 
         // Load manifest
-        let loaded = ImageManifest::load(&temp_dir.path().to_path_buf()).unwrap();
+        let loaded = ImageManifest::load(temp_dir.path()).unwrap();
         assert_eq!(loaded.name, "test");
         assert_eq!(loaded.tag, "latest");
         assert_eq!(loaded.registry, "ghcr.io");
@@ -1705,7 +1711,7 @@ mod tests {
     #[test]
     fn test_image_manifest_load_missing_file() {
         let temp_dir = TempDir::new().unwrap();
-        let result = ImageManifest::load(&temp_dir.path().to_path_buf());
+        let result = ImageManifest::load(temp_dir.path());
         assert!(result.is_err());
     }
 
@@ -1717,7 +1723,7 @@ mod tests {
         std::fs::write(temp_dir.path().join("file1.txt"), "hello").unwrap();
         std::fs::write(temp_dir.path().join("file2.txt"), "world!").unwrap();
 
-        let size = calculate_directory_size(&temp_dir.path().to_path_buf()).unwrap();
+        let size = calculate_directory_size(temp_dir.path()).unwrap();
         assert_eq!(size, 11); // "hello" (5) + "world!" (6)
     }
 
@@ -1732,7 +1738,7 @@ mod tests {
         std::fs::create_dir(&subdir).unwrap();
         std::fs::write(subdir.join("file2.txt"), "world!").unwrap();
 
-        let size = calculate_directory_size(&temp_dir.path().to_path_buf()).unwrap();
+        let size = calculate_directory_size(temp_dir.path()).unwrap();
         assert_eq!(size, 11); // "hello" (5) + "world!" (6)
     }
 

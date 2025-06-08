@@ -39,7 +39,7 @@ pub enum Error {
     DependencyNotFound(String),
 
     #[error("HTTP error: {0}")]
-    HttpError(#[from] reqwest::Error),
+    Http(#[from] reqwest::Error),
 
     #[error("Invalid image name: {0}")]
     InvalidImageName(String),

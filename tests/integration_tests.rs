@@ -49,7 +49,7 @@ fn test_cli_list_empty() {
     let _temp_dir = setup_test_env();
 
     let mut cmd = Command::cargo_bin("meda").unwrap();
-    cmd.args(&["list", "--json"]);
+    cmd.args(["list", "--json"]);
 
     cmd.assert()
         .success()
@@ -64,7 +64,7 @@ fn test_cli_get_nonexistent_vm() {
     let _temp_dir = setup_test_env();
 
     let mut cmd = Command::cargo_bin("meda").unwrap();
-    cmd.args(&["get", "nonexistent-vm", "--json"]);
+    cmd.args(["get", "nonexistent-vm", "--json"]);
 
     cmd.assert()
         .failure()
@@ -79,7 +79,7 @@ fn test_cli_start_nonexistent_vm() {
     let _temp_dir = setup_test_env();
 
     let mut cmd = Command::cargo_bin("meda").unwrap();
-    cmd.args(&["start", "nonexistent-vm", "--json"]);
+    cmd.args(["start", "nonexistent-vm", "--json"]);
 
     cmd.assert()
         .failure()
@@ -94,7 +94,7 @@ fn test_cli_stop_nonexistent_vm() {
     let _temp_dir = setup_test_env();
 
     let mut cmd = Command::cargo_bin("meda").unwrap();
-    cmd.args(&["stop", "nonexistent-vm", "--json"]);
+    cmd.args(["stop", "nonexistent-vm", "--json"]);
 
     cmd.assert()
         .failure()
@@ -109,7 +109,7 @@ fn test_cli_delete_nonexistent_vm() {
     let _temp_dir = setup_test_env();
 
     let mut cmd = Command::cargo_bin("meda").unwrap();
-    cmd.args(&["delete", "nonexistent-vm", "--json"]);
+    cmd.args(["delete", "nonexistent-vm", "--json"]);
 
     cmd.assert()
         .failure()
@@ -124,7 +124,7 @@ fn test_cli_images_empty() {
     let _temp_dir = setup_test_env();
 
     let mut cmd = Command::cargo_bin("meda").unwrap();
-    cmd.args(&["images", "--json"]);
+    cmd.args(["images", "--json"]);
 
     cmd.assert()
         .success()
@@ -139,7 +139,7 @@ fn test_cli_port_forward_nonexistent_vm() {
     let _temp_dir = setup_test_env();
 
     let mut cmd = Command::cargo_bin("meda").unwrap();
-    cmd.args(&["port-forward", "nonexistent-vm", "8080", "80", "--json"]);
+    cmd.args(["port-forward", "nonexistent-vm", "8080", "80", "--json"]);
 
     cmd.assert()
         .success() // Port forward returns success but with error message in JSON
@@ -155,7 +155,7 @@ fn test_cli_rmi_nonexistent_image() {
     let _temp_dir = setup_test_env();
 
     let mut cmd = Command::cargo_bin("meda").unwrap();
-    cmd.args(&["rmi", "nonexistent-image", "--force", "--json"]);
+    cmd.args(["rmi", "nonexistent-image", "--force", "--json"]);
 
     cmd.assert()
         .success() // Should succeed but report image not found
@@ -170,7 +170,7 @@ fn test_cli_prune_empty() {
     let _temp_dir = setup_test_env();
 
     let mut cmd = Command::cargo_bin("meda").unwrap();
-    cmd.args(&["prune", "--json"]);
+    cmd.args(["prune", "--json"]);
 
     cmd.assert()
         .success()
@@ -185,7 +185,7 @@ fn test_cli_run_nonexistent_image() {
     let _temp_dir = setup_test_env();
 
     let mut cmd = Command::cargo_bin("meda").unwrap();
-    cmd.args(&["run", "nonexistent-image", "--no-start", "--json"]);
+    cmd.args(["run", "nonexistent-image", "--no-start", "--json"]);
 
     cmd.assert()
         .failure()
@@ -223,7 +223,7 @@ fn test_cli_create_vm_success() {
     let _temp_dir = setup_test_env();
 
     let mut cmd = Command::cargo_bin("meda").unwrap();
-    cmd.args(&["create", "test-vm", "--json"]);
+    cmd.args(["create", "test-vm", "--json"]);
 
     // This will actually succeed and download dependencies
     cmd.assert()
@@ -241,7 +241,7 @@ fn test_cli_create_image_success() {
     let _temp_dir = setup_test_env();
 
     let mut cmd = Command::cargo_bin("meda").unwrap();
-    cmd.args(&["create-image", "test-image", "--json"]);
+    cmd.args(["create-image", "test-image", "--json"]);
 
     // This will succeed and create the image
     cmd.assert()
@@ -259,7 +259,7 @@ fn test_cli_pull_nonexistent_image() {
     let _temp_dir = setup_test_env();
 
     let mut cmd = Command::cargo_bin("meda").unwrap();
-    cmd.args(&["pull", "nonexistent-repo/nonexistent-image", "--json"]);
+    cmd.args(["pull", "nonexistent-repo/nonexistent-image", "--json"]);
 
     // This should fail because the image doesn't exist in the registry
     cmd.assert()
@@ -276,7 +276,7 @@ fn test_cli_push_nonexistent_image() {
     let _temp_dir = setup_test_env();
 
     let mut cmd = Command::cargo_bin("meda").unwrap();
-    cmd.args(&[
+    cmd.args([
         "push",
         "nonexistent-local-image",
         "target-image",
@@ -321,7 +321,7 @@ fn test_cli_create_with_force_flag() {
     let _temp_dir = setup_test_env();
 
     let mut cmd = Command::cargo_bin("meda").unwrap();
-    cmd.args(&["create", "test-vm", "--force", "--json"]);
+    cmd.args(["create", "test-vm", "--force", "--json"]);
 
     // Should succeed and accept the force flag
     cmd.assert()
@@ -342,7 +342,7 @@ fn test_cli_create_with_user_data() {
     std::fs::write(&user_data_file, "#cloud-config\npackages:\n  - curl").unwrap();
 
     let mut cmd = Command::cargo_bin("meda").unwrap();
-    cmd.args(&[
+    cmd.args([
         "create",
         "test-vm",
         user_data_file.to_str().unwrap(),
@@ -364,7 +364,7 @@ fn test_cli_json_output_format() {
     let _temp_dir = setup_test_env();
 
     let mut cmd = Command::cargo_bin("meda").unwrap();
-    cmd.args(&["list", "--json"]);
+    cmd.args(["list", "--json"]);
 
     let output = cmd.assert().success();
 
@@ -385,7 +385,7 @@ fn test_cli_complete_vm_workflow() {
 
     // 1. Create a VM
     let mut cmd = Command::cargo_bin("meda").unwrap();
-    cmd.args(&["create", "workflow-test-vm", "--json"]);
+    cmd.args(["create", "workflow-test-vm", "--json"]);
     cmd.assert()
         .success()
         .stdout(predicate::str::contains("success\": true"))
@@ -395,13 +395,13 @@ fn test_cli_complete_vm_workflow() {
 
     // 2. List VMs and verify our VM appears
     let mut cmd = Command::cargo_bin("meda").unwrap();
-    cmd.args(&["list", "--json"]);
+    cmd.args(["list", "--json"]);
     let output = cmd.assert().success();
     output.stdout(predicate::str::contains("workflow-test-vm"));
 
     // 3. Get VM details
     let mut cmd = Command::cargo_bin("meda").unwrap();
-    cmd.args(&["get", "workflow-test-vm", "--json"]);
+    cmd.args(["get", "workflow-test-vm", "--json"]);
     cmd.assert()
         .success()
         .stdout(predicate::str::contains("workflow-test-vm"))
@@ -409,12 +409,12 @@ fn test_cli_complete_vm_workflow() {
 
     // 4. Try to start VM (this will fail without actual hypervisor but tests the CLI)
     let mut cmd = Command::cargo_bin("meda").unwrap();
-    cmd.args(&["start", "workflow-test-vm", "--json"]);
+    cmd.args(["start", "workflow-test-vm", "--json"]);
     // Start will likely fail due to missing hypervisor setup, but that's expected
 
     // 5. Delete the VM
     let mut cmd = Command::cargo_bin("meda").unwrap();
-    cmd.args(&["delete", "workflow-test-vm", "--json"]);
+    cmd.args(["delete", "workflow-test-vm", "--json"]);
     cmd.assert()
         .success()
         .stdout(predicate::str::contains("success\": true"))
@@ -424,7 +424,7 @@ fn test_cli_complete_vm_workflow() {
 
     // 6. Verify VM is gone
     let mut cmd = Command::cargo_bin("meda").unwrap();
-    cmd.args(&["list", "--json"]);
+    cmd.args(["list", "--json"]);
     cmd.assert()
         .success()
         .stdout(predicate::str::contains("[]")); // Should be empty now
@@ -440,7 +440,7 @@ fn test_cli_complete_image_workflow() {
 
     // 1. Create an image
     let mut cmd = Command::cargo_bin("meda").unwrap();
-    cmd.args(&["create-image", "workflow-test-image", "--json"]);
+    cmd.args(["create-image", "workflow-test-image", "--json"]);
     cmd.assert()
         .success()
         .stdout(predicate::str::contains("success\": true"))
@@ -448,20 +448,20 @@ fn test_cli_complete_image_workflow() {
 
     // 2. List images and verify our image appears
     let mut cmd = Command::cargo_bin("meda").unwrap();
-    cmd.args(&["images", "--json"]);
+    cmd.args(["images", "--json"]);
     let output = cmd.assert().success();
     output.stdout(predicate::str::contains("workflow-test-image"));
 
     // 3. Remove the image
     let mut cmd = Command::cargo_bin("meda").unwrap();
-    cmd.args(&["rmi", "workflow-test-image", "--force", "--json"]);
+    cmd.args(["rmi", "workflow-test-image", "--force", "--json"]);
     cmd.assert()
         .success()
         .stdout(predicate::str::contains("success\": true"));
 
     // 4. Verify image is gone
     let mut cmd = Command::cargo_bin("meda").unwrap();
-    cmd.args(&["images", "--json"]);
+    cmd.args(["images", "--json"]);
     cmd.assert()
         .success()
         .stdout(predicate::str::contains("[]")); // Should be empty now
@@ -477,14 +477,14 @@ fn test_cli_vm_ssh_connectivity() {
 
     // 1. Create a VM
     let mut cmd = Command::cargo_bin("meda").unwrap();
-    cmd.args(&["create", "ssh-test-vm", "--json"]);
+    cmd.args(["create", "ssh-test-vm", "--json"]);
     cmd.assert()
         .success()
         .stdout(predicate::str::contains("success\": true"));
 
     // 2. Start the VM
     let mut cmd = Command::cargo_bin("meda").unwrap();
-    cmd.args(&["start", "ssh-test-vm", "--json"]);
+    cmd.args(["start", "ssh-test-vm", "--json"]);
 
     // Note: VM start might fail in CI environment without proper hypervisor setup
     // But we can still test the command execution
@@ -494,7 +494,7 @@ fn test_cli_vm_ssh_connectivity() {
     if start_result.try_success().is_ok() {
         // 3. Get VM details to find IP
         let mut cmd = Command::cargo_bin("meda").unwrap();
-        cmd.args(&["get", "ssh-test-vm", "--json"]);
+        cmd.args(["get", "ssh-test-vm", "--json"]);
         let output = cmd.assert().success();
 
         // Parse JSON to get IP
@@ -513,13 +513,13 @@ fn test_cli_vm_ssh_connectivity() {
 
         // 6. Stop the VM
         let mut cmd = Command::cargo_bin("meda").unwrap();
-        cmd.args(&["stop", "ssh-test-vm", "--json"]);
+        cmd.args(["stop", "ssh-test-vm", "--json"]);
         cmd.assert().success();
     }
 
     // 7. Clean up - delete the VM
     let mut cmd = Command::cargo_bin("meda").unwrap();
-    cmd.args(&["delete", "ssh-test-vm", "--json"]);
+    cmd.args(["delete", "ssh-test-vm", "--json"]);
     cmd.assert().success();
 
     cleanup_test_env();
@@ -533,21 +533,21 @@ fn test_cli_vm_ssh_with_port_forward() {
 
     // 1. Create a VM
     let mut cmd = Command::cargo_bin("meda").unwrap();
-    cmd.args(&["create", "ssh-port-test-vm", "--json"]);
+    cmd.args(["create", "ssh-port-test-vm", "--json"]);
     cmd.assert()
         .success()
         .stdout(predicate::str::contains("success\": true"));
 
     // 2. Start the VM
     let mut cmd = Command::cargo_bin("meda").unwrap();
-    cmd.args(&["start", "ssh-port-test-vm", "--json"]);
+    cmd.args(["start", "ssh-port-test-vm", "--json"]);
 
     let start_result = cmd.assert();
 
     if start_result.try_success().is_ok() {
         // 3. Set up port forwarding for SSH
         let mut cmd = Command::cargo_bin("meda").unwrap();
-        cmd.args(&["port-forward", "ssh-port-test-vm", "2222", "22", "--json"]);
+        cmd.args(["port-forward", "ssh-port-test-vm", "2222", "22", "--json"]);
         cmd.assert()
             .success()
             .stdout(predicate::str::contains("success\": true"));
@@ -560,13 +560,13 @@ fn test_cli_vm_ssh_with_port_forward() {
 
         // 6. Stop the VM
         let mut cmd = Command::cargo_bin("meda").unwrap();
-        cmd.args(&["stop", "ssh-port-test-vm", "--json"]);
+        cmd.args(["stop", "ssh-port-test-vm", "--json"]);
         cmd.assert().success();
     }
 
     // 7. Clean up
     let mut cmd = Command::cargo_bin("meda").unwrap();
-    cmd.args(&["delete", "ssh-port-test-vm", "--json"]);
+    cmd.args(["delete", "ssh-port-test-vm", "--json"]);
     cmd.assert().success();
 
     cleanup_test_env();
@@ -580,12 +580,12 @@ fn test_cli_run_image_ssh() {
 
     // 1. Create an image first (if not already exists)
     let mut cmd = Command::cargo_bin("meda").unwrap();
-    cmd.args(&["create-image", "ssh-test-image", "--json"]);
+    cmd.args(["create-image", "ssh-test-image", "--json"]);
     cmd.assert().success();
 
     // 2. Run VM from image
     let mut cmd = Command::cargo_bin("meda").unwrap();
-    cmd.args(&[
+    cmd.args([
         "run",
         "ssh-test-image:latest",
         "--name",
@@ -598,7 +598,7 @@ fn test_cli_run_image_ssh() {
     if run_result.try_success().is_ok() {
         // 3. Get VM details
         let mut cmd = Command::cargo_bin("meda").unwrap();
-        cmd.args(&["get", "ssh-from-image-vm", "--json"]);
+        cmd.args(["get", "ssh-from-image-vm", "--json"]);
         let output = cmd.assert().success();
 
         // Parse JSON to get IP
@@ -617,13 +617,13 @@ fn test_cli_run_image_ssh() {
 
         // 6. Clean up
         let mut cmd = Command::cargo_bin("meda").unwrap();
-        cmd.args(&["delete", "ssh-from-image-vm", "--json"]);
+        cmd.args(["delete", "ssh-from-image-vm", "--json"]);
         cmd.assert().success();
     }
 
     // Clean up image
     let mut cmd = Command::cargo_bin("meda").unwrap();
-    cmd.args(&["rmi", "ssh-test-image", "--force", "--json"]);
+    cmd.args(["rmi", "ssh-test-image", "--force", "--json"]);
     cmd.assert().success();
 
     cleanup_test_env();
@@ -635,7 +635,7 @@ fn test_ssh_connection(ip: &str) {
 
     // Test basic SSH connectivity with timeout
     let mut cmd = Command::new("ssh");
-    cmd.args(&[
+    cmd.args([
         "-o",
         "ConnectTimeout=10",
         "-o",
@@ -676,7 +676,7 @@ fn test_ssh_connection_via_port(host: &str, port: u16) {
     println!("Testing SSH connection to {}:{}", host, port);
 
     let mut cmd = Command::new("ssh");
-    cmd.args(&[
+    cmd.args([
         "-p",
         &port.to_string(),
         "-o",
@@ -747,7 +747,7 @@ runcmd:
 
     // 1. Create VM with custom user-data
     let mut cmd = Command::cargo_bin("meda").unwrap();
-    cmd.args(&[
+    cmd.args([
         "create",
         "ssh-custom-vm",
         user_data_file.to_str().unwrap(),
@@ -759,14 +759,14 @@ runcmd:
 
     // 2. Start the VM
     let mut cmd = Command::cargo_bin("meda").unwrap();
-    cmd.args(&["start", "ssh-custom-vm", "--json"]);
+    cmd.args(["start", "ssh-custom-vm", "--json"]);
 
     let start_result = cmd.assert();
 
     if start_result.try_success().is_ok() {
         // 3. Get VM IP
         let mut cmd = Command::cargo_bin("meda").unwrap();
-        cmd.args(&["get", "ssh-custom-vm", "--json"]);
+        cmd.args(["get", "ssh-custom-vm", "--json"]);
         let output = cmd.assert().success();
 
         let stdout = std::str::from_utf8(&output.get_output().stdout).unwrap();
@@ -784,13 +784,13 @@ runcmd:
 
         // 6. Stop the VM
         let mut cmd = Command::cargo_bin("meda").unwrap();
-        cmd.args(&["stop", "ssh-custom-vm", "--json"]);
+        cmd.args(["stop", "ssh-custom-vm", "--json"]);
         cmd.assert().success();
     }
 
     // 7. Clean up
     let mut cmd = Command::cargo_bin("meda").unwrap();
-    cmd.args(&["delete", "ssh-custom-vm", "--json"]);
+    cmd.args(["delete", "ssh-custom-vm", "--json"]);
     cmd.assert().success();
 
     cleanup_test_env();
@@ -809,7 +809,7 @@ fn test_ssh_with_commands(ip: &str) {
 
     for (command, expected_output) in test_commands {
         let mut cmd = Command::new("ssh");
-        cmd.args(&[
+        cmd.args([
             "-o",
             "ConnectTimeout=10",
             "-o",

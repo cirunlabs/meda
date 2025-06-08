@@ -114,10 +114,10 @@ pub async fn bootstrap(config: &Config) -> Result<()> {
         info!("Downloading ORAS");
         let temp_tar = config.asset_dir.join("oras.tar.gz");
         download_file(&config.oras_url, &temp_tar).await?;
-        
+
         // Extract ORAS binary from tar.gz
         extract_oras_binary(&temp_tar, &config.oras_bin)?;
-        
+
         // Remove temporary tar file
         fs::remove_file(&temp_tar).ok();
     }
@@ -172,10 +172,10 @@ pub async fn bootstrap_binaries_only(config: &Config) -> Result<()> {
         info!("Downloading ORAS");
         let temp_tar = config.asset_dir.join("oras.tar.gz");
         download_file(&config.oras_url, &temp_tar).await?;
-        
+
         // Extract ORAS binary from tar.gz
         extract_oras_binary(&temp_tar, &config.oras_bin)?;
-        
+
         // Remove temporary tar file
         fs::remove_file(&temp_tar).ok();
     }
@@ -407,21 +407,19 @@ pub async fn list(config: &Config, json: bool) -> Result<()> {
 
     if json {
         println!("{}", serde_json::to_string_pretty(&vms)?);
+    } else if vms.is_empty() {
+        info!("No VMs found");
     } else {
-        if vms.is_empty() {
-            info!("No VMs found");
-        } else {
+        println!(
+            "{:<15} {:<10} {:<15} {:<10} {:<10}",
+            "NAME", "STATE", "IP", "MEMORY", "DISK"
+        );
+        println!("{}", "-".repeat(65));
+        for vm in vms {
             println!(
                 "{:<15} {:<10} {:<15} {:<10} {:<10}",
-                "NAME", "STATE", "IP", "MEMORY", "DISK"
+                vm.name, vm.state, vm.ip, vm.memory, vm.disk
             );
-            println!("{}", "-".repeat(65));
-            for vm in vms {
-                println!(
-                    "{:<15} {:<10} {:<15} {:<10} {:<10}",
-                    vm.name, vm.state, vm.ip, vm.memory, vm.disk
-                );
-            }
         }
     }
 
@@ -503,11 +501,9 @@ pub async fn get(config: &Config, name: &str, json: bool) -> Result<()> {
         if let Some(ip) = vm_info.ip {
             println!("IP: {}", ip);
         }
-        if let Some(details) = vm_info.details {
-            if let serde_json::Value::Object(map) = details {
-                for (key, value) in map {
-                    println!("{}: {}", key, value.as_str().unwrap_or("N/A"));
-                }
+        if let Some(serde_json::Value::Object(map)) = vm_info.details {
+            for (key, value) in map {
+                println!("{}: {}", key, value.as_str().unwrap_or("N/A"));
             }
         }
     }
@@ -768,7 +764,7 @@ fn get_vm_disk_size(config: &Config, name: &str) -> Result<String> {
 
     // Get actual disk size using qemu-img info
     let output = std::process::Command::new("qemu-img")
-        .args(&["info", "--output=json", rootfs_path.to_str().unwrap()])
+        .args(["info", "--output=json", rootfs_path.to_str().unwrap()])
         .output();
 
     match output {
@@ -790,32 +786,34 @@ fn get_vm_disk_size(config: &Config, name: &str) -> Result<String> {
 
 fn extract_oras_binary(tar_path: &std::path::Path, dest_path: &std::path::Path) -> Result<()> {
     use std::io::Read;
-    
+
     let tar_file = fs::File::open(tar_path)?;
     let tar = flate2::read::GzDecoder::new(tar_file);
     let mut archive = tar::Archive::new(tar);
-    
+
     for entry in archive.entries()? {
         let mut entry = entry?;
         let path = entry.path()?;
-        
+
         // Look for the oras binary (it should be just "oras" in the archive)
         if path.file_name() == Some(std::ffi::OsStr::new("oras")) {
             let mut buffer = Vec::new();
             entry.read_to_end(&mut buffer)?;
-            
+
             fs::write(dest_path, buffer)?;
-            
+
             // Make executable
             let mut perms = fs::metadata(dest_path)?.permissions();
             perms.set_mode(0o755);
             fs::set_permissions(dest_path, perms)?;
-            
+
             return Ok(());
         }
     }
-    
-    Err(Error::Other("ORAS binary not found in tar archive".to_string()))
+
+    Err(Error::Other(
+        "ORAS binary not found in tar archive".to_string(),
+    ))
 }
 
 #[cfg(test)]

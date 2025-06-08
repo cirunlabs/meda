@@ -185,17 +185,14 @@ async fn main() -> Result<()> {
             user_data,
             no_start,
         } => {
-            image::run_from_image(
-                &config,
-                &image,
-                name.as_deref(),
-                registry.as_deref(),
-                org.as_deref(),
-                user_data.as_deref(),
+            let options = image::RunOptions {
+                vm_name: name.as_deref(),
+                registry: registry.as_deref(),
+                org: org.as_deref(),
+                user_data_path: user_data.as_deref(),
                 no_start,
-                cli.json,
-            )
-            .await?;
+            };
+            image::run_from_image(&config, &image, options, cli.json).await?;
         }
     }
 

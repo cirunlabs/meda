@@ -175,7 +175,7 @@ pub fn check_process_running(pid: u32) -> bool {
 }
 
 pub fn write_string_to_file(path: &Path, content: &str) -> Result<()> {
-    fs::write(path, content).map_err(|e| Error::Io(e))
+    fs::write(path, content).map_err(Error::Io)
 }
 
 #[cfg(test)]
