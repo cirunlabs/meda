@@ -52,6 +52,9 @@ async fn main() -> Result<()> {
         Commands::Get { name } => {
             vm::get(&config, &name, cli.json).await?;
         }
+        Commands::Ip { name } => {
+            vm::ip(&config, &name, cli.json).await?;
+        }
         Commands::Start { name } => {
             vm::start(&config, &name, cli.json).await?;
         }

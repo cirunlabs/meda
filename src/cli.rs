@@ -35,6 +35,12 @@ pub enum Commands {
         name: String,
     },
     
+    /// Get VM IP address
+    Ip {
+        /// Name of the VM
+        name: String,
+    },
+    
     /// Start a VM
     Start {
         /// Name of the VM

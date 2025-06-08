@@ -15,7 +15,8 @@ pub struct VmInfo {
     pub name: String,
     pub state: String,
     pub ip: String,
-    pub ports: String,
+    pub memory: String,
+    pub disk: String,
 }
 
 #[derive(Serialize)]
@@ -359,13 +360,15 @@ pub async fn list(config: &Config, json: bool) -> Result<()> {
             };
             
             let ip = get_vm_ip(config, &name).unwrap_or_else(|_| "N/A".to_string());
-            let ports = get_vm_ports(config, &name).unwrap_or_else(|_| "N/A".to_string());
+            let memory = get_vm_memory(config, &name).unwrap_or_else(|_| config.mem.clone());
+            let disk = get_vm_disk_size(config, &name).unwrap_or_else(|_| config.disk_size.clone());
             
             vms.push(VmInfo {
                 name,
                 state,
                 ip,
-                ports,
+                memory,
+                disk,
             });
         }
     }
@@ -376,10 +379,10 @@ pub async fn list(config: &Config, json: bool) -> Result<()> {
         if vms.is_empty() {
             info!("No VMs found");
         } else {
-            println!("{:<15} {:<10} {:<15} {:<10}", "NAME", "STATE", "IP", "PORTS");
-            println!("{}", "-".repeat(50));
+            println!("{:<15} {:<10} {:<15} {:<10} {:<10}", "NAME", "STATE", "IP", "MEMORY", "DISK");
+            println!("{}", "-".repeat(65));
             for vm in vms {
-                println!("{:<15} {:<10} {:<15} {:<10}", vm.name, vm.state, vm.ip, vm.ports);
+                println!("{:<15} {:<10} {:<15} {:<10} {:<10}", vm.name, vm.state, vm.ip, vm.memory, vm.disk);
             }
         }
     }
@@ -418,10 +421,9 @@ pub async fn get(config: &Config, name: &str, json: bool) -> Result<()> {
         details.insert("tap_device".to_string(), serde_json::Value::String(tap.trim().to_string()));
     }
     
-    // Add port forwarding info
-    if let Ok(ports) = fs::read_to_string(vm_dir.join("ports")) {
-        details.insert("port_forwards".to_string(), serde_json::Value::String(ports.trim().to_string()));
-    }
+    // Add VM resource info
+    details.insert("memory".to_string(), serde_json::Value::String(get_vm_memory(config, name).unwrap_or_else(|_| config.mem.clone())));
+    details.insert("disk_size".to_string(), serde_json::Value::String(get_vm_disk_size(config, name).unwrap_or_else(|_| config.disk_size.clone())));
     
     // Add VM directory path
     details.insert("vm_dir".to_string(), serde_json::Value::String(vm_dir.to_string_lossy().to_string()));
@@ -610,6 +612,28 @@ pub async fn delete(config: &Config, name: &str, json: bool) -> Result<()> {
     Ok(())
 }
 
+pub async fn ip(config: &Config, name: &str, json: bool) -> Result<()> {
+    let vm_dir = config.vm_dir(name);
+    
+    if !vm_dir.exists() {
+        return Err(Error::VmNotFound(name.to_string()));
+    }
+    
+    let ip = get_vm_ip(config, name)?;
+    
+    if json {
+        let result = serde_json::json!({
+            "vm": name,
+            "ip": ip
+        });
+        println!("{}", serde_json::to_string_pretty(&result)?);
+    } else {
+        println!("{}", ip);
+    }
+    
+    Ok(())
+}
+
 pub fn check_vm_running(config: &Config, name: &str) -> Result<bool> {
     let vm_dir = config.vm_dir(name);
     let pid_file = vm_dir.join("pid");
@@ -639,16 +663,62 @@ fn get_vm_ip(config: &Config, name: &str) -> Result<String> {
     Ok(format!("{}.2", subnet.trim()))
 }
 
-fn get_vm_ports(config: &Config, name: &str) -> Result<String> {
+fn get_vm_memory(config: &Config, name: &str) -> Result<String> {
     let vm_dir = config.vm_dir(name);
-    let ports_file = vm_dir.join("ports");
+    let start_script = vm_dir.join("start.sh");
     
-    if !ports_file.exists() {
-        return Ok("none".to_string());
+    if !start_script.exists() {
+        return Ok(config.mem.clone());
     }
     
-    let ports = fs::read_to_string(ports_file)?;
-    Ok(ports.trim().to_string())
+    let content = fs::read_to_string(start_script)?;
+    
+    // Extract memory from start script
+    for line in content.lines() {
+        if line.contains("--memory size=") {
+            if let Some(start) = line.find("--memory size=") {
+                let after_flag = &line[start + 14..];
+                if let Some(end) = after_flag.find(' ') {
+                    return Ok(after_flag[..end].to_string());
+                } else {
+                    // Handle case where memory is at end of line
+                    return Ok(after_flag.trim().to_string());
+                }
+            }
+        }
+    }
+    
+    Ok(config.mem.clone())
+}
+
+fn get_vm_disk_size(config: &Config, name: &str) -> Result<String> {
+    let vm_dir = config.vm_dir(name);
+    let rootfs_path = vm_dir.join("rootfs.raw");
+    
+    if !rootfs_path.exists() {
+        return Ok(config.disk_size.clone());
+    }
+    
+    // Get actual disk size using qemu-img info
+    let output = std::process::Command::new("qemu-img")
+        .args(&["info", "--output=json", rootfs_path.to_str().unwrap()])
+        .output();
+        
+    match output {
+        Ok(output) if output.status.success() => {
+            let json_str = String::from_utf8_lossy(&output.stdout);
+            if let Ok(json) = serde_json::from_str::<serde_json::Value>(&json_str) {
+                if let Some(virtual_size) = json.get("virtual-size").and_then(|v| v.as_u64()) {
+                    // Convert bytes to GB
+                    let size_gb = virtual_size / (1024 * 1024 * 1024);
+                    return Ok(format!("{}G", size_gb));
+                }
+            }
+        }
+        _ => {}
+    }
+    
+    Ok(config.disk_size.clone())
 }
 
 #[cfg(test)]
@@ -722,28 +792,44 @@ mod tests {
     }
 
     #[test]
-    fn test_get_vm_ports_no_file() {
+    fn test_get_vm_memory_no_start_script() {
         let (config, _temp_dir) = setup_test_config();
         
-        // Create VM directory without ports file
+        // Create VM directory without start script
         let vm_dir = config.vm_dir("test-vm");
         std::fs::create_dir_all(&vm_dir).unwrap();
         
-        let ports = get_vm_ports(&config, "test-vm").unwrap();
-        assert_eq!(ports, "none");
+        let memory = get_vm_memory(&config, "test-vm").unwrap();
+        assert_eq!(memory, config.mem);
     }
 
     #[test]
-    fn test_get_vm_ports_with_file() {
+    fn test_get_vm_memory_with_start_script() {
         let (config, _temp_dir) = setup_test_config();
         
-        // Create VM directory with ports file
+        // Create VM directory with start script containing memory setting
         let vm_dir = config.vm_dir("test-vm");
         std::fs::create_dir_all(&vm_dir).unwrap();
-        std::fs::write(vm_dir.join("ports"), "8080->80").unwrap();
+        let start_script = format!(
+            "#!/bin/bash\n{} --memory size=2048M --cpus boot=4",
+            config.ch_bin.display()
+        );
+        std::fs::write(vm_dir.join("start.sh"), start_script).unwrap();
         
-        let ports = get_vm_ports(&config, "test-vm").unwrap();
-        assert_eq!(ports, "8080->80");
+        let memory = get_vm_memory(&config, "test-vm").unwrap();
+        assert_eq!(memory, "2048M");
+    }
+
+    #[test]
+    fn test_get_vm_disk_size_no_rootfs() {
+        let (config, _temp_dir) = setup_test_config();
+        
+        // Create VM directory without rootfs file
+        let vm_dir = config.vm_dir("test-vm");
+        std::fs::create_dir_all(&vm_dir).unwrap();
+        
+        let disk_size = get_vm_disk_size(&config, "test-vm").unwrap();
+        assert_eq!(disk_size, config.disk_size);
     }
 
     #[tokio::test]
