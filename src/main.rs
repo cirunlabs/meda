@@ -1,3 +1,4 @@
+mod api;
 mod cli;
 mod config;
 mod error;
@@ -11,6 +12,7 @@ use cli::{Cli, Commands};
 use config::Config;
 use error::Result;
 use log::info;
+use std::sync::Arc;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -212,6 +214,24 @@ async fn main() -> Result<()> {
                 resources,
             };
             image::run_from_image(&config, &image, options, cli.json).await?;
+        }
+        Commands::Serve { port, host } => {
+            info!("Starting Meda API server on {}:{}", host, port);
+            let config_arc = Arc::new(config);
+            let app = api::create_router(config_arc);
+
+            let listener = tokio::net::TcpListener::bind(format!("{}:{}", host, port)).await?;
+            info!("API server running on http://{}:{}", host, port);
+            info!(
+                "Swagger UI available at http://{}:{}/swagger-ui",
+                host, port
+            );
+            info!(
+                "OpenAPI spec available at http://{}:{}/api/v1/openapi.json",
+                host, port
+            );
+
+            axum::serve(listener, app).await?;
         }
     }
 

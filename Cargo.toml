@@ -26,6 +26,16 @@ sha2 = "0.10"
 base64 = "0.21"
 tar = "0.4"
 flate2 = "1.0"
+# REST API dependencies
+axum = { version = "0.7", features = ["macros"] }
+tower = "0.4"
+tower-http = { version = "0.5", features = ["cors", "trace"] }
+hyper = { version = "1.0", features = ["full"] }
+uuid = { version = "1.0", features = ["v4", "serde"] }
+# OpenAPI/Swagger documentation
+utoipa = { version = "4.2", features = ["axum_extras", "chrono", "uuid"] }
+utoipa-swagger-ui = { version = "6.0", features = ["axum"] }
+chrono = { version = "0.4", features = ["serde"] }
 
 [dev-dependencies]
 tokio-test = "0.4"
