@@ -12,6 +12,28 @@ use std::process::Command;
 use std::thread;
 use std::time::Duration;
 
+#[derive(Clone)]
+pub struct VmResources {
+    pub memory: String,
+    pub cpus: u8,
+    pub disk_size: String,
+}
+
+impl VmResources {
+    pub fn from_config_with_overrides(
+        config: &Config,
+        memory: Option<&str>,
+        cpus: Option<u8>,
+        disk_size: Option<&str>,
+    ) -> Self {
+        Self {
+            memory: memory.unwrap_or(&config.mem).to_string(),
+            cpus: cpus.unwrap_or(config.cpus as u8),
+            disk_size: disk_size.unwrap_or(&config.disk_size).to_string(),
+        }
+    }
+}
+
 #[derive(Serialize)]
 pub struct VmInfo {
     pub name: String,
@@ -191,6 +213,7 @@ pub async fn create(
     config: &Config,
     name: &str,
     user_data_path: Option<&str>,
+    resources: &VmResources,
     json: bool,
 ) -> Result<()> {
     let vm_dir = config.vm_dir(name);
@@ -216,6 +239,17 @@ pub async fn create(
     let vm_rootfs = vm_dir.join("rootfs.raw");
     fs::copy(&config.base_raw, &vm_rootfs)?;
 
+    // Resize disk if different from base
+    if resources.disk_size != config.disk_size {
+        if !json {
+            info!("Resizing disk to {}", resources.disk_size);
+        }
+        run_command(
+            "qemu-img",
+            &["resize", vm_rootfs.to_str().unwrap(), &resources.disk_size],
+        )?;
+    }
+
     // Generate network config with a unique subnet
     let subnet = crate::network::generate_unique_subnet(config).await?;
     // Generate unique TAP device name
@@ -224,6 +258,11 @@ pub async fn create(
     // Store network config
     write_string_to_file(&vm_dir.join("subnet"), &subnet)?;
     write_string_to_file(&vm_dir.join("tapdev"), &tap_name)?;
+
+    // Store VM resource configuration
+    write_string_to_file(&vm_dir.join("memory"), &resources.memory)?;
+    write_string_to_file(&vm_dir.join("cpus"), &resources.cpus.to_string())?;
+    write_string_to_file(&vm_dir.join("disk_size"), &resources.disk_size)?;
 
     // Create cloud-init files
     let meta_data = format!("instance-id: {}\nlocal-hostname: {}\n", name, name);
@@ -331,8 +370,8 @@ fi
         config.ch_bin.display(),
         vm_dir.display(),
         config.fw_bin.display(),
-        config.cpus,
-        config.mem,
+        resources.cpus,
+        resources.memory,
         vm_dir.display(),
         vm_dir.display(),
         tap_name,
@@ -728,8 +767,14 @@ pub fn get_vm_ip(config: &Config, name: &str) -> Result<String> {
 
 fn get_vm_memory(config: &Config, name: &str) -> Result<String> {
     let vm_dir = config.vm_dir(name);
-    let start_script = vm_dir.join("start.sh");
+    let memory_file = vm_dir.join("memory");
 
+    if memory_file.exists() {
+        return Ok(fs::read_to_string(memory_file)?.trim().to_string());
+    }
+
+    // Fallback to extracting from start script for older VMs
+    let start_script = vm_dir.join("start.sh");
     if !start_script.exists() {
         return Ok(config.mem.clone());
     }
