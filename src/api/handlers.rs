@@ -461,7 +461,7 @@ pub async fn port_forward(
 
 // Image management endpoints will be implemented next...
 
-/// List all images  
+/// List all images
 #[utoipa::path(
     get,
     path = "/api/v1/images",
