@@ -129,8 +129,11 @@ cargo tarpaulin --out html --output-dir ./coverage
    - Convert Windows line endings: `dos2unix src/*.rs`
    - Check encoding: `file src/*.rs` (should show ASCII or UTF-8 text)
    - Files detected as "C source, ASCII text" are acceptable for Rust files
-4. **Test failures**: Ensure tests pass locally with system dependencies installed
-5. **Cache issues**: Clear cache by updating `Cargo.lock` or changing cache keys
+4. **Unit test failures**: 
+   - For binary crates: use `cargo test --bins` instead of `cargo test --lib`
+   - Check locally: `cargo test --bins` (unit tests) or `cargo test` (all tests)
+5. **Test failures**: Ensure tests pass locally with system dependencies installed
+6. **Cache issues**: Clear cache by updating `Cargo.lock` or changing cache keys
 
 ### Performance
 

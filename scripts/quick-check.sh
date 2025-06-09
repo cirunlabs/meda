@@ -65,9 +65,9 @@ cargo doc --no-deps --document-private-items --quiet
 check_status "Documentation"
 
 # Run tests but skip integration tests (faster)
-echo "🧪 Running tests (excluding integration)..."
-cargo test --quiet --exclude integration_tests 2>/dev/null || cargo test --quiet --bin meda
-check_status "Tests"
+echo "🧪 Running unit tests..."
+cargo test --quiet --bins
+check_status "Unit tests"
 
 # Check for trailing whitespace
 echo "🔎 Checking for trailing whitespace..."

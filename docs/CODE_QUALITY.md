@@ -95,7 +95,7 @@ cargo fmt                                                  # Format code
 cargo fmt --check                                         # Check formatting
 cargo clippy --all-targets --all-features -- -D warnings # Strict linting
 cargo test                                               # All tests
-cargo test --lib                                         # Unit tests only
+cargo test --bins                                        # Unit tests (binary crate)
 cargo doc --no-deps --document-private-items            # Build docs
 cargo audit                                              # Security audit
 cargo machete                                            # Unused deps

@@ -96,7 +96,7 @@ jobs:
         run: sudo setfacl -m u:${USER}:rw /dev/kvm
 
       - name: Run unit tests
-        run: cargo test --lib
+        run: cargo test --bins
 
       - name: Run integration tests
         run: cargo test --test integration_tests

@@ -75,7 +75,7 @@ if [ "$WITH_INTEGRATION" = true ]; then
     check_status "All tests"
 else
     echo "🧪 Running unit tests..."
-    cargo test --quiet --exclude integration_tests 2>/dev/null || cargo test --quiet --bin meda
+    cargo test --quiet --bins
     check_status "Unit tests"
 fi
 
