@@ -16,7 +16,7 @@ jobs:
         with:
           fetch-depth: 0       # get full history & tags
 
-      - uses: mlugg/setup-zig@v1
+      - uses: mlugg/setup-zig@v2
       - name: Install openssl
         run: sudo apt-get install pkg-config libssl-dev
       - uses: sigstore/cosign-installer@v3.8.2

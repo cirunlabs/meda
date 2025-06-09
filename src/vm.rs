@@ -1,22 +1,24 @@
 use crate::config::Config;
 use crate::error::{Error, Result};
-use crate::network::{generate_random_mac, setup_networking, cleanup_networking};
-use crate::util::{check_process_running, download_file, ensure_dependency, run_command, run_command_with_output, write_string_to_file};
+use crate::network::{cleanup_networking, generate_random_mac, setup_networking};
+use crate::util::{
+    check_process_running, download_file, ensure_dependency, run_command, write_string_to_file,
+};
 use log::info;
 use serde::Serialize;
 use std::fs;
-use std::io::Write;
+use std::os::unix::fs::PermissionsExt;
 use std::process::Command;
 use std::thread;
 use std::time::Duration;
-use std::os::unix::fs::PermissionsExt;
 
 #[derive(Serialize)]
 pub struct VmInfo {
     pub name: String,
     pub state: String,
     pub ip: String,
-    pub ports: String,
+    pub memory: String,
+    pub disk: String,
 }
 
 #[derive(Serialize)]
@@ -37,97 +39,196 @@ pub async fn bootstrap(config: &Config) -> Result<()> {
     info!("Bootstrapping environment");
     info!("Ensuring directories exist");
     config.ensure_dirs()?;
-    
+
     // Download base image if needed
     if !config.base_raw.exists() {
         info!("Downloading Ubuntu image");
         let tmp_file = config.asset_dir.join("img.qcow2");
         download_file(&config.os_url, &tmp_file).await?;
-        
+
         ensure_dependency("qemu-img", "qemu-utils")?;
-        
+
         info!("Converting to raw format");
         run_command(
-            "qemu-img", 
-            &["convert", "-O", "raw", tmp_file.to_str().unwrap(), config.base_raw.to_str().unwrap()]
+            "qemu-img",
+            &[
+                "convert",
+                "-f",
+                "qcow2",
+                "-O",
+                "raw",
+                tmp_file.to_str().unwrap(),
+                config.base_raw.to_str().unwrap(),
+            ],
         )?;
-        
-        fs::remove_file(tmp_file)?;
+
+        // Resize image
+        run_command(
+            "qemu-img",
+            &[
+                "resize",
+                config.base_raw.to_str().unwrap(),
+                &config.disk_size,
+            ],
+        )?;
+
+        // Remove temporary file
+        fs::remove_file(&tmp_file).ok();
     }
-    
+
     // Download firmware if needed
     if !config.fw_bin.exists() {
         info!("Downloading firmware");
         download_file(&config.fw_url, &config.fw_bin).await?;
-        fs::set_permissions(&config.fw_bin, fs::Permissions::from_mode(0o644))?;
+
+        // Make firmware executable
+        let mut perms = fs::metadata(&config.fw_bin)?.permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(&config.fw_bin, perms)?;
     }
-    
+
     // Download cloud-hypervisor if needed
     if !config.ch_bin.exists() {
         info!("Downloading cloud-hypervisor");
         download_file(&config.ch_url, &config.ch_bin).await?;
-        fs::set_permissions(&config.ch_bin, fs::Permissions::from_mode(0o755))?;
+
+        // Make cloud-hypervisor executable
+        let mut perms = fs::metadata(&config.ch_bin)?.permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(&config.ch_bin, perms)?;
     }
-    
+
     // Download ch-remote if needed
     if !config.cr_bin.exists() {
         info!("Downloading ch-remote");
         download_file(&config.cr_url, &config.cr_bin).await?;
-        fs::set_permissions(&config.cr_bin, fs::Permissions::from_mode(0o755))?;
+
+        // Make ch-remote executable
+        let mut perms = fs::metadata(&config.cr_bin)?.permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(&config.cr_bin, perms)?;
     }
-    
+
+    // Download ORAS if needed
+    if !config.oras_bin.exists() {
+        info!("Downloading ORAS");
+        let temp_tar = config.asset_dir.join("oras.tar.gz");
+        download_file(&config.oras_url, &temp_tar).await?;
+
+        // Extract ORAS binary from tar.gz
+        extract_oras_binary(&temp_tar, &config.oras_bin)?;
+
+        // Remove temporary tar file
+        fs::remove_file(&temp_tar).ok();
+    }
+
     // Ensure other dependencies
     ensure_dependency("genisoimage", "genisoimage")?;
-    ensure_dependency("iptables", "iptables")?;
-    ensure_dependency("jq", "jq")?;
-    
+
+    info!("Bootstrap complete");
     Ok(())
 }
 
-pub async fn create(config: &Config, name: &str, user_data_path: Option<&str>, json_output: bool) -> Result<()> {
-    let vm_dir = config.vm_dir(name);
-    
-    if !json_output {
-        info!("Attempting to create VM: {}", name);
+pub async fn bootstrap_binaries_only(config: &Config) -> Result<()> {
+    info!("Bootstrapping hypervisor binaries");
+    info!("Ensuring directories exist");
+    config.ensure_dirs()?;
+
+    // Download firmware if needed
+    if !config.fw_bin.exists() {
+        info!("Downloading firmware");
+        download_file(&config.fw_url, &config.fw_bin).await?;
+
+        // Make firmware executable
+        let mut perms = fs::metadata(&config.fw_bin)?.permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(&config.fw_bin, perms)?;
     }
-    
+
+    // Download cloud-hypervisor if needed
+    if !config.ch_bin.exists() {
+        info!("Downloading cloud-hypervisor");
+        download_file(&config.ch_url, &config.ch_bin).await?;
+
+        // Make cloud-hypervisor executable
+        let mut perms = fs::metadata(&config.ch_bin)?.permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(&config.ch_bin, perms)?;
+    }
+
+    // Download ch-remote if needed
+    if !config.cr_bin.exists() {
+        info!("Downloading ch-remote");
+        download_file(&config.cr_url, &config.cr_bin).await?;
+
+        // Make ch-remote executable
+        let mut perms = fs::metadata(&config.cr_bin)?.permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(&config.cr_bin, perms)?;
+    }
+
+    // Download ORAS if needed
+    if !config.oras_bin.exists() {
+        info!("Downloading ORAS");
+        let temp_tar = config.asset_dir.join("oras.tar.gz");
+        download_file(&config.oras_url, &temp_tar).await?;
+
+        // Extract ORAS binary from tar.gz
+        extract_oras_binary(&temp_tar, &config.oras_bin)?;
+
+        // Remove temporary tar file
+        fs::remove_file(&temp_tar).ok();
+    }
+
+    // Ensure other dependencies
+    ensure_dependency("genisoimage", "genisoimage")?;
+
+    info!("Hypervisor binaries bootstrap complete");
+    Ok(())
+}
+
+pub async fn create(
+    config: &Config,
+    name: &str,
+    user_data_path: Option<&str>,
+    json: bool,
+) -> Result<()> {
+    let vm_dir = config.vm_dir(name);
+
     if vm_dir.exists() {
-        info!("VM directory already exists at: {}", vm_dir.display());
         return Err(Error::VmAlreadyExists(name.to_string()));
     }
-    
-    bootstrap(config).await?;
-    fs::create_dir_all(&vm_dir)?;
-    
-    info!("Creating rootfs");
-    let rootfs_path = vm_dir.join("rootfs.raw");
-    fs::copy(&config.base_raw, &rootfs_path)?;
-    
-    // Resize disk if needed
-    if config.disk_size != "10G" {
-        info!("Resizing disk to {}", config.disk_size);
-        ensure_dependency("qemu-img", "qemu-utils")?;
-        run_command(
-            "qemu-img", 
-            &["resize", rootfs_path.to_str().unwrap(), &config.disk_size]
-        )?;
+
+    if !json {
+        info!("Creating VM: {}", name);
     }
-    
+
+    // Bootstrap to ensure we have the necessary binaries
+    bootstrap(config).await?;
+
+    // Create VM directory
+    fs::create_dir_all(&vm_dir)?;
+
+    // Copy base image
+    if !json {
+        info!("Copying base image");
+    }
+    let vm_rootfs = vm_dir.join("rootfs.raw");
+    fs::copy(&config.base_raw, &vm_rootfs)?;
+
     // Generate network config with a unique subnet
     let subnet = crate::network::generate_unique_subnet(config).await?;
-    let tap_name = format!("tap-{}", name);
-    
+    // Generate unique TAP device name
+    let tap_name = crate::network::generate_unique_tap_name(config, name).await?;
+
     // Store network config
     write_string_to_file(&vm_dir.join("subnet"), &subnet)?;
     write_string_to_file(&vm_dir.join("tapdev"), &tap_name)?;
-    
-    // Generate cloud-init files
-    let meta_data = format!(
-        "instance-id: {}\nlocal-hostname: {}\n",
-        name, name
-    );
+
+    // Create cloud-init files
+    let meta_data = format!("instance-id: {}\nlocal-hostname: {}\n", name, name);
     write_string_to_file(&vm_dir.join("meta-data"), &meta_data)?;
-    
+
     // User data
     if let Some(path) = user_data_path {
         fs::copy(path, vm_dir.join("user-data"))?;
@@ -136,7 +237,7 @@ pub async fn create(config: &Config, name: &str, user_data_path: Option<&str>, j
 users:
   - name: cirun
     sudo: ALL=(ALL) NOPASSWD:ALL
-    passwd: $6$rEnJIC81m0vtbMZY$nMsAwJxOwDTyTGfZ1w2.rVssmJbAk0I7hz3T4ufaTcOb5m81Ix9SqPQVnl49.tbXrajEw4lG4qW0g0sVXTZ5X.
+    passwd: $6$ep7LxhhmhQHf.TiY$qPJVJQCnPMnyFdmD0ymP7CH2dos0awET8JlSzDqoiK6AOQwDpx8fCLJ1C5c7nvkVJbIpQCOalC8l2BGkRzogM.
     lock_passwd: false
     inactive: false
     groups: sudo
@@ -145,12 +246,23 @@ ssh_pwauth: true
 "#;
         write_string_to_file(&vm_dir.join("user-data"), default_user_data)?;
     }
-    
+
     // Generate MAC address
-    let mac_addr = generate_random_mac();
-    write_string_to_file(&vm_dir.join("mac"), &mac_addr)?;
-    
-    // Network config
+    let mac = generate_random_mac();
+    write_string_to_file(&vm_dir.join("mac"), &mac)?;
+
+    // Create cloud-init ISO
+    let ci_dir = vm_dir.join("ci");
+    fs::create_dir_all(&ci_dir)?;
+
+    // Copy cloud-init files to ci directory
+    for file in ["meta-data", "user-data"] {
+        let src = vm_dir.join(file);
+        let dst = ci_dir.join(file);
+        fs::copy(&src, &dst)?;
+    }
+
+    // Create network-config
     let network_config = format!(
         r#"version: 2
 ethernets:
@@ -163,30 +275,34 @@ ethernets:
     nameservers:
       addresses: [8.8.8.8, 1.1.1.1]
 "#,
-        mac_addr, subnet, subnet
+        mac, subnet, subnet
     );
-    write_string_to_file(&vm_dir.join("network-config"), &network_config)?;
-    
+    write_string_to_file(&ci_dir.join("network-config"), &network_config)?;
+
     // Create cloud-init ISO
-    info!("Creating cloud-init ISO");
-    run_command(
-        "genisoimage", 
+    let ci_iso = vm_dir.join("ci.iso");
+    if !json {
+        info!("Creating cloud-init configuration");
+    }
+    crate::util::run_command_quietly(
+        "genisoimage",
         &[
-            "-quiet", 
-            "-output", vm_dir.join("ci.iso").to_str().unwrap(),
-            "-volid", "cidata",
+            "-output",
+            ci_iso.to_str().unwrap(),
+            "-volid",
+            "cidata",
             "-joliet",
             "-rock",
-            vm_dir.join("user-data").to_str().unwrap(),
-            vm_dir.join("meta-data").to_str().unwrap(),
-            vm_dir.join("network-config").to_str().unwrap(),
-        ]
+            ci_dir.to_str().unwrap(),
+        ],
     )?;
-    
+
     // Setup networking
-    info!("Setting up host networking");
+    if !json {
+        info!("Setting up host networking");
+    }
     setup_networking(config, name, &tap_name, &subnet).await?;
-    
+
     // Create start script
     let start_script = format!(
         r#"#!/bin/bash
@@ -220,437 +336,642 @@ fi
         vm_dir.display(),
         vm_dir.display(),
         tap_name,
-        mac_addr,
+        mac,
         vm_dir.display(),
         vm_dir.display(),
         vm_dir.display(),
         vm_dir.display()
     );
-    
+
     let start_script_path = vm_dir.join("start.sh");
     write_string_to_file(&start_script_path, &start_script)?;
-    fs::set_permissions(&start_script_path, fs::Permissions::from_mode(0o755))?;
-    
-    // Start the VM
-    info!("Booting VM {}", name);
-    run_command("bash", &[start_script_path.to_str().unwrap()])?;
-    
-    // Wait for VM to boot
-    info!("Waiting for VM to boot");
-    let vm_ip = format!("{}.2", subnet);
-    
-    for i in 0..60 {
-        // Check if process is still running
-        if !check_vm_running(config, name)? {
-            let error = if let Ok(log) = fs::read_to_string(vm_dir.join("ch.log")) {
-                if let Some(line) = log.lines().find(|l| l.contains("error:")) {
-                    line.to_string()
-                } else {
-                    "Process terminated unexpectedly".to_string()
-                }
-            } else {
-                "Process terminated unexpectedly".to_string()
-            };
-            
-            return Err(Error::VmStartFailed(error));
-        }
-        
-        // Try to ping the VM
-        let ping_result = run_command_with_output(
-            "ping", 
-            &["-c1", "-W1", &vm_ip]
-        );
-        
-        if ping_result.is_ok() && ping_result.unwrap().status.success() {
-            info!("VM {} is now running at {}", name, vm_ip);
-            return Ok(());
-        }
-        
-        if i % 5 == 0 {
-            print!(".");
-            std::io::stdout().flush().unwrap();
-        }
-        
-        thread::sleep(Duration::from_secs(2));
-    }
-    
-    if check_vm_running(config, name)? {
-        if json_output {
-            let result = VmResult {
-                success: true,
-                message: format!("VM {} created and started at {}", name, vm_ip),
-            };
-            println!("{}", serde_json::to_string_pretty(&result)?);
-        } else {
-            info!("VM {} appears to be running but not responding to ping yet", name);
-            println!("\nWhen ready: ssh ubuntu@{}", vm_ip);
-        }
-        Ok(())
+
+    // Make start script executable
+    let mut perms = fs::metadata(&start_script_path)?.permissions();
+    perms.set_mode(0o755);
+    fs::set_permissions(&start_script_path, perms)?;
+
+    let message = format!("Successfully created VM: {}", name);
+    if json {
+        let result = VmResult {
+            success: true,
+            message,
+        };
+        println!("{}", serde_json::to_string_pretty(&result)?);
     } else {
-        Err(Error::VmStartFailed("VM failed to start properly".to_string()))
+        info!("{}", message);
     }
+
+    Ok(())
 }
 
-pub async fn list(config: &Config, json_output: bool) -> Result<()> {
-    bootstrap(config).await?;
-    
-    let mut vm_list: Vec<VmInfo> = Vec::new();
-    
-    if !json_output {
-        println!("{:<18} {:<8} {:<15} {:<10}", "NAME", "STATE", "IP", "PORTS");
+pub async fn list(config: &Config, json: bool) -> Result<()> {
+    config.ensure_dirs()?;
+
+    if !config.vm_root.exists() {
+        if json {
+            println!("[]");
+        } else {
+            info!("No VMs found");
+        }
+        return Ok(());
     }
-    
+
+    let mut vms = Vec::new();
+
     for entry in fs::read_dir(&config.vm_root)? {
         let entry = entry?;
         let path = entry.path();
-        
+
         if path.is_dir() {
             let name = path.file_name().unwrap().to_string_lossy().to_string();
-            let mut state = "stopped";
-            let mut ip = "-".to_string();
-            let mut fwd = "-".to_string();
-            
-            if check_vm_running(config, &name)? {
-                state = "running";
-                
-                if let Ok(subnet) = fs::read_to_string(path.join("subnet")) {
-                    ip = format!("{}.2", subnet.trim());
-                }
-                
-                if let Ok(ports) = fs::read_to_string(path.join("ports")) {
-                    fwd = ports.trim().to_string();
-                }
-            }
-            
-            if json_output {
-                vm_list.push(VmInfo {
-                    name: name.clone(),
-                    state: state.to_string(),
-                    ip: ip.clone(),
-                    ports: fwd.clone(),
-                });
+            let state = if check_vm_running(config, &name)? {
+                "running".to_string()
             } else {
-                println!("{:<18} {:<8} {:<15} {:<10}", name, state, ip, fwd);
-            }
-        }
-    }
-    
-    if json_output {
-        println!("{}", serde_json::to_string_pretty(&vm_list)?);
-    }
-    
-    Ok(())
-}
-
-pub async fn get(config: &Config, name: &str, json_output: bool) -> Result<()> {
-    let vm_dir = config.vm_dir(name);
-    
-    if !vm_dir.exists() {
-        return Err(Error::VmNotFound(name.to_string()));
-    }
-    
-    let is_running = check_vm_running(config, name)?;
-    let mut vm_info = VmDetailedInfo {
-        name: name.to_string(),
-        state: if is_running { "running" } else { "stopped" }.to_string(),
-        ip: None,
-        details: None,
-    };
-    
-    if is_running {
-        if !json_output {
-            info!("VM {} is running", name);
-        }
-        
-        let output = run_command_with_output(
-            config.cr_bin.to_str().unwrap(),
-            &["--api-socket", vm_dir.join("api.sock").to_str().unwrap(), "info"]
-        )?;
-        
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        let parsed = serde_json::from_str::<serde_json::Value>(&stdout)?;
-        
-        if json_output {
-            vm_info.details = Some(parsed);
-            
-            if let Ok(subnet) = fs::read_to_string(vm_dir.join("subnet")) {
-                vm_info.ip = Some(format!("{}.2", subnet.trim()));
-            }
-            
-            println!("{}", serde_json::to_string_pretty(&vm_info)?);
-        } else {
-            println!("{}", serde_json::to_string_pretty(&parsed)?);
-        }
-    } else {
-        if !json_output {
-            info!("VM {} is not running", name);
-            
-            if let Ok(subnet) = fs::read_to_string(vm_dir.join("subnet")) {
-                println!("\nTo start VM: meda start {}", name);
-                println!("When running: ssh ubuntu@{}.2\n", subnet.trim());
-            }
-        } else {
-            if let Ok(subnet) = fs::read_to_string(vm_dir.join("subnet")) {
-                vm_info.ip = Some(format!("{}.2", subnet.trim()));
-            }
-            
-            println!("{}", serde_json::to_string_pretty(&vm_info)?);
-        }
-    }
-    
-    Ok(())
-}
-
-pub async fn start(config: &Config, name: &str, json_output: bool) -> Result<()> {
-    let vm_dir = config.vm_dir(name);
-    
-    if !vm_dir.exists() {
-        return Err(Error::VmNotFound(name.to_string()));
-    }
-    
-    if check_vm_running(config, name)? {
-        if json_output {
-            let result = VmResult {
-                success: true,
-                message: format!("VM {} is already running", name),
+                "stopped".to_string()
             };
-            println!("{}", serde_json::to_string_pretty(&result)?);
-        } else {
-            info!("VM {} is already running", name);
+
+            let ip = get_vm_ip(config, &name).unwrap_or_else(|_| "N/A".to_string());
+            let memory = get_vm_memory(config, &name).unwrap_or_else(|_| config.mem.clone());
+            let disk = get_vm_disk_size(config, &name).unwrap_or_else(|_| config.disk_size.clone());
+
+            vms.push(VmInfo {
+                name,
+                state,
+                ip,
+                memory,
+                disk,
+            });
         }
-        return Ok(());
     }
-    
-    // Ensure network device is set up
-    if vm_dir.join("tapdev").exists() && vm_dir.join("subnet").exists() {
-        let tap = fs::read_to_string(vm_dir.join("tapdev"))?.trim().to_string();
-        let subnet = fs::read_to_string(vm_dir.join("subnet"))?.trim().to_string();
-        
-        setup_networking(config, name, &tap, &subnet).await?;
+
+    if json {
+        println!("{}", serde_json::to_string_pretty(&vms)?);
+    } else if vms.is_empty() {
+        info!("No VMs found");
     } else {
-        return Err(Error::NetworkConfigMissing(name.to_string()));
-    }
-    
-    info!("Starting VM {}", name);
-    let start_script = vm_dir.join("start.sh");
-    
-    if start_script.exists() {
-        run_command("bash", &[start_script.to_str().unwrap()])?;
-    } else {
-        return Err(Error::Other(format!("Start script for VM {} is missing", name)));
-    }
-    
-    // Wait for VM to boot
-    let subnet = fs::read_to_string(vm_dir.join("subnet"))?.trim().to_string();
-    let vm_ip = format!("{}.2", subnet);
-    
-    for _ in 0..20 {
-        let ping_result = run_command_with_output(
-            "ping", 
-            &["-c1", "-W1", &vm_ip]
+        println!(
+            "{:<15} {:<10} {:<15} {:<10} {:<10}",
+            "NAME", "STATE", "IP", "MEMORY", "DISK"
         );
-        
-        if ping_result.is_ok() && ping_result.unwrap().status.success() {
-            if json_output {
-                let result = VmResult {
-                    success: true,
-                    message: format!("VM {} is now running at {}", name, vm_ip),
-                };
-                println!("{}", serde_json::to_string_pretty(&result)?);
-            } else {
-                info!("VM {} is now running at {}", name, vm_ip);
-                println!("\nVM {} → ssh ubuntu@{}", name, vm_ip);
-            }
-            return Ok(());
+        println!("{}", "-".repeat(65));
+        for vm in vms {
+            println!(
+                "{:<15} {:<10} {:<15} {:<10} {:<10}",
+                vm.name, vm.state, vm.ip, vm.memory, vm.disk
+            );
         }
-        
-        thread::sleep(Duration::from_secs(1));
     }
-    
-    if json_output {
-        let result = VmResult {
-            success: true,
-            message: format!("VM {} is starting at {}", name, vm_ip),
-        };
-        println!("{}", serde_json::to_string_pretty(&result)?);
-    } else {
-        info!("VM may still be booting. Check status with 'meda list'");
-        println!("\nVM {} → ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null ubuntu@{}", name, vm_ip);
-        println!("Password authentication is enabled with password: ubuntu");
-    }
-    
+
     Ok(())
 }
 
-pub async fn stop(config: &Config, name: &str, json_output: bool) -> Result<()> {
+pub async fn get(config: &Config, name: &str, json: bool) -> Result<()> {
     let vm_dir = config.vm_dir(name);
-    
+
     if !vm_dir.exists() {
         return Err(Error::VmNotFound(name.to_string()));
     }
-    
-    if !check_vm_running(config, name)? {
-        if json_output {
+
+    let state = if check_vm_running(config, name)? {
+        "running".to_string()
+    } else {
+        "stopped".to_string()
+    };
+
+    let ip = get_vm_ip(config, name).ok();
+
+    // Collect additional details
+    let mut details = serde_json::Map::new();
+
+    // Add network info
+    if let Ok(subnet) = fs::read_to_string(vm_dir.join("subnet")) {
+        details.insert(
+            "subnet".to_string(),
+            serde_json::Value::String(subnet.trim().to_string()),
+        );
+    }
+
+    if let Ok(mac) = fs::read_to_string(vm_dir.join("mac")) {
+        details.insert(
+            "mac".to_string(),
+            serde_json::Value::String(mac.trim().to_string()),
+        );
+    }
+
+    if let Ok(tap) = fs::read_to_string(vm_dir.join("tapdev")) {
+        details.insert(
+            "tap_device".to_string(),
+            serde_json::Value::String(tap.trim().to_string()),
+        );
+    }
+
+    // Add VM resource info
+    details.insert(
+        "memory".to_string(),
+        serde_json::Value::String(
+            get_vm_memory(config, name).unwrap_or_else(|_| config.mem.clone()),
+        ),
+    );
+    details.insert(
+        "disk_size".to_string(),
+        serde_json::Value::String(
+            get_vm_disk_size(config, name).unwrap_or_else(|_| config.disk_size.clone()),
+        ),
+    );
+
+    // Add VM directory path
+    details.insert(
+        "vm_dir".to_string(),
+        serde_json::Value::String(vm_dir.to_string_lossy().to_string()),
+    );
+
+    let vm_info = VmDetailedInfo {
+        name: name.to_string(),
+        state,
+        ip,
+        details: Some(serde_json::Value::Object(details)),
+    };
+
+    if json {
+        println!("{}", serde_json::to_string_pretty(&vm_info)?);
+    } else {
+        println!("VM: {}", vm_info.name);
+        println!("State: {}", vm_info.state);
+        if let Some(ip) = vm_info.ip {
+            println!("IP: {}", ip);
+        }
+        if let Some(serde_json::Value::Object(map)) = vm_info.details {
+            for (key, value) in map {
+                println!("{}: {}", key, value.as_str().unwrap_or("N/A"));
+            }
+        }
+    }
+
+    Ok(())
+}
+
+pub async fn start(config: &Config, name: &str, json: bool) -> Result<()> {
+    let vm_dir = config.vm_dir(name);
+
+    if !vm_dir.exists() {
+        return Err(Error::VmNotFound(name.to_string()));
+    }
+
+    if check_vm_running(config, name)? {
+        let message = format!("VM {} is already running", name);
+        if json {
             let result = VmResult {
-                success: true,
-                message: format!("VM {} is not running", name),
+                success: false,
+                message,
             };
             println!("{}", serde_json::to_string_pretty(&result)?);
         } else {
-            info!("VM {} is not running", name);
+            return Err(Error::VmAlreadyRunning(name.to_string()));
         }
         return Ok(());
     }
-    
-    info!("Stopping VM {}", name);
-    let api_sock = vm_dir.join("api.sock");
-    
-    if api_sock.exists() {
-        // Try graceful shutdown first
-        run_command(
-            config.cr_bin.to_str().unwrap(),
-            &["--api-socket", api_sock.to_str().unwrap(), "power-button"]
-        )?;
-        
-        // Wait for VM to stop
-        for _ in 0..15 {
-            if !check_vm_running(config, name)? {
-                if json_output {
-                    let result = VmResult {
-                        success: true,
-                        message: format!("VM {} stopped", name),
-                    };
-                    println!("{}", serde_json::to_string_pretty(&result)?);
-                } else {
-                    info!("VM {} stopped", name);
-                }
-                return Ok(());
-            }
-            
-            thread::sleep(Duration::from_secs(1));
-        }
-        
-        // Force kill if still running
-        if let Ok(pid_str) = fs::read_to_string(vm_dir.join("pid")) {
-            if let Ok(pid) = pid_str.trim().parse::<u32>() {
-                info!("Force stopping VM {}", name);
-                
-                // Try SIGTERM first
-                let _ = Command::new("kill")
-                    .arg("-TERM")
-                    .arg(pid.to_string())
-                    .status();
-                
-                thread::sleep(Duration::from_secs(2));
-                
-                // Then SIGKILL if needed
-                let _ = Command::new("kill")
-                    .arg("-KILL")
-                    .arg(pid.to_string())
-                    .status();
-                
-                fs::remove_file(vm_dir.join("api.sock")).ok();
-                fs::remove_file(vm_dir.join("pid")).ok();
-            }
-        }
+
+    if !json {
+        info!("Starting VM: {}", name);
     }
-    
-    if json_output {
+
+    let start_script = vm_dir.join("start.sh");
+    if !start_script.exists() {
+        return Err(Error::Other(format!(
+            "Start script not found for VM: {}",
+            name
+        )));
+    }
+
+    // Run the start script
+    run_command("bash", &[start_script.to_str().unwrap()])?;
+
+    // Wait a moment for the VM to start
+    thread::sleep(Duration::from_secs(3));
+
+    // Verify VM is running
+    if !check_vm_running(config, name)? {
+        return Err(Error::Other(format!("Failed to start VM: {}", name)));
+    }
+
+    let message = format!("Successfully started VM: {}", name);
+    if json {
         let result = VmResult {
             success: true,
-            message: format!("VM {} stopped", name),
+            message,
         };
         println!("{}", serde_json::to_string_pretty(&result)?);
     } else {
-        info!("VM {} stopped", name);
+        info!("{}", message);
     }
+
     Ok(())
 }
 
-pub async fn delete(config: &Config, name: &str, json_output: bool) -> Result<()> {
+pub async fn stop(config: &Config, name: &str, json: bool) -> Result<()> {
     let vm_dir = config.vm_dir(name);
-    
+
     if !vm_dir.exists() {
         return Err(Error::VmNotFound(name.to_string()));
     }
-    
+
+    if !check_vm_running(config, name)? {
+        let message = format!("VM {} is not running", name);
+        if json {
+            let result = VmResult {
+                success: false,
+                message,
+            };
+            println!("{}", serde_json::to_string_pretty(&result)?);
+        } else {
+            return Err(Error::VmNotRunning(name.to_string()));
+        }
+        return Ok(());
+    }
+
+    if !json {
+        info!("Stopping VM: {}", name);
+    }
+
+    let pid_file = vm_dir.join("pid");
+    if let Ok(pid_str) = fs::read_to_string(&pid_file) {
+        if let Ok(pid) = pid_str.trim().parse::<u32>() {
+            // Try graceful shutdown first
+            let _ = Command::new("kill")
+                .args(["-TERM", &pid.to_string()])
+                .output();
+
+            // Wait for graceful shutdown
+            for _ in 0..10 {
+                if !check_process_running(pid) {
+                    break;
+                }
+                thread::sleep(Duration::from_millis(500));
+            }
+
+            // Force kill if still running
+            if check_process_running(pid) {
+                let _ = Command::new("kill")
+                    .args(["-KILL", &pid.to_string()])
+                    .output();
+            }
+        }
+    }
+
+    // Clean up PID file
+    fs::remove_file(&pid_file).ok();
+
+    let message = format!("Successfully stopped VM: {}", name);
+    if json {
+        let result = VmResult {
+            success: true,
+            message,
+        };
+        println!("{}", serde_json::to_string_pretty(&result)?);
+    } else {
+        info!("{}", message);
+    }
+
+    Ok(())
+}
+
+pub async fn delete(config: &Config, name: &str, json: bool) -> Result<()> {
+    let vm_dir = config.vm_dir(name);
+
+    if !vm_dir.exists() {
+        return Err(Error::VmNotFound(name.to_string()));
+    }
+
     // Stop VM if running
     if check_vm_running(config, name)? {
-        stop(config, name, false).await?;
+        if !json {
+            info!("Stopping VM before deletion");
+        }
+        stop(config, name, json).await?;
     }
-    
+
+    if !json {
+        info!("Deleting VM: {}", name);
+    }
+
     // Clean up networking
     cleanup_networking(config, name).await?;
-    
+
     // Remove VM directory
-    fs::remove_dir_all(vm_dir)?;
-    
-    if json_output {
+    fs::remove_dir_all(&vm_dir)?;
+
+    let message = format!("Successfully deleted VM: {}", name);
+    if json {
         let result = VmResult {
             success: true,
-            message: format!("VM {} removed", name),
+            message,
         };
         println!("{}", serde_json::to_string_pretty(&result)?);
     } else {
-        info!("VM {} removed", name);
+        info!("{}", message);
     }
+
+    Ok(())
+}
+
+pub async fn ip(config: &Config, name: &str, json: bool) -> Result<()> {
+    let vm_dir = config.vm_dir(name);
+
+    if !vm_dir.exists() {
+        return Err(Error::VmNotFound(name.to_string()));
+    }
+
+    let ip = get_vm_ip(config, name)?;
+
+    if json {
+        let result = serde_json::json!({
+            "vm": name,
+            "ip": ip
+        });
+        println!("{}", serde_json::to_string_pretty(&result)?);
+    } else {
+        println!("{}", ip);
+    }
+
     Ok(())
 }
 
 pub fn check_vm_running(config: &Config, name: &str) -> Result<bool> {
     let vm_dir = config.vm_dir(name);
     let pid_file = vm_dir.join("pid");
-    let api_sock = vm_dir.join("api.sock");
-    
-    // First check if the VM directory exists
-    if !vm_dir.exists() {
+
+    if !pid_file.exists() {
         return Ok(false);
     }
-    
-    // Check if we have a PID file and the process is running
-    if pid_file.exists() {
-        if let Ok(pid_str) = fs::read_to_string(&pid_file) {
-            if let Ok(pid) = pid_str.trim().parse::<u32>() {
-                if check_process_running(pid) {
-                    // Process exists
-                    return Ok(true);
-                } else {
-                    // Process doesn't exist, clean up stale files
-                    fs::remove_file(&api_sock).ok();
-                    fs::remove_file(&pid_file).ok();
-                    return Ok(false);
-                }
-            }
+
+    if let Ok(pid_str) = fs::read_to_string(&pid_file) {
+        if let Ok(pid) = pid_str.trim().parse::<u32>() {
+            return Ok(check_process_running(pid));
         }
     }
-    
-    // If we get here, either there's no PID file or it couldn't be parsed
-    // Try to find the cloud-hypervisor process by looking for the VM name in the process list
-    let output = run_command_with_output(
-        "ps", 
-        &["aux"]
-    )?;
-    
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let vm_path = vm_dir.to_string_lossy().to_string();
-    
-    for line in stdout.lines() {
-        if line.contains("cloud-hypervisor") && line.contains(&vm_path) && !line.contains("grep") {
-            let parts: Vec<&str> = line.split_whitespace().collect();
-            if parts.len() >= 2 {
-                if let Ok(pid) = parts[1].parse::<u32>() {
-                    // Found running process, create pid file
-                    fs::write(&pid_file, pid.to_string())?;
-                    return Ok(true);
-                }
-            }
-        }
-    }
-    
-    // If the socket exists but we couldn't find a process, clean it up
-    if api_sock.exists() {
-        fs::remove_file(&api_sock).ok();
-    }
-    
+
     Ok(false)
+}
+
+pub fn get_vm_ip(config: &Config, name: &str) -> Result<String> {
+    let vm_dir = config.vm_dir(name);
+    let subnet_file = vm_dir.join("subnet");
+
+    if !subnet_file.exists() {
+        return Err(Error::Other("Subnet file not found".to_string()));
+    }
+
+    let subnet = fs::read_to_string(subnet_file)?;
+    Ok(format!("{}.2", subnet.trim()))
+}
+
+fn get_vm_memory(config: &Config, name: &str) -> Result<String> {
+    let vm_dir = config.vm_dir(name);
+    let start_script = vm_dir.join("start.sh");
+
+    if !start_script.exists() {
+        return Ok(config.mem.clone());
+    }
+
+    let content = fs::read_to_string(start_script)?;
+
+    // Extract memory from start script
+    for line in content.lines() {
+        if line.contains("--memory size=") {
+            if let Some(start) = line.find("--memory size=") {
+                let after_flag = &line[start + 14..];
+                if let Some(end) = after_flag.find(' ') {
+                    return Ok(after_flag[..end].to_string());
+                } else {
+                    // Handle case where memory is at end of line
+                    return Ok(after_flag.trim().to_string());
+                }
+            }
+        }
+    }
+
+    Ok(config.mem.clone())
+}
+
+fn get_vm_disk_size(config: &Config, name: &str) -> Result<String> {
+    let vm_dir = config.vm_dir(name);
+    let rootfs_path = vm_dir.join("rootfs.raw");
+
+    if !rootfs_path.exists() {
+        return Ok(config.disk_size.clone());
+    }
+
+    // Get actual disk size using qemu-img info
+    let output = std::process::Command::new("qemu-img")
+        .args(["info", "--output=json", rootfs_path.to_str().unwrap()])
+        .output();
+
+    match output {
+        Ok(output) if output.status.success() => {
+            let json_str = String::from_utf8_lossy(&output.stdout);
+            if let Ok(json) = serde_json::from_str::<serde_json::Value>(&json_str) {
+                if let Some(virtual_size) = json.get("virtual-size").and_then(|v| v.as_u64()) {
+                    // Convert bytes to GB
+                    let size_gb = virtual_size / (1024 * 1024 * 1024);
+                    return Ok(format!("{}G", size_gb));
+                }
+            }
+        }
+        _ => {}
+    }
+
+    Ok(config.disk_size.clone())
+}
+
+fn extract_oras_binary(tar_path: &std::path::Path, dest_path: &std::path::Path) -> Result<()> {
+    use std::io::Read;
+
+    let tar_file = fs::File::open(tar_path)?;
+    let tar = flate2::read::GzDecoder::new(tar_file);
+    let mut archive = tar::Archive::new(tar);
+
+    for entry in archive.entries()? {
+        let mut entry = entry?;
+        let path = entry.path()?;
+
+        // Look for the oras binary (it should be just "oras" in the archive)
+        if path.file_name() == Some(std::ffi::OsStr::new("oras")) {
+            let mut buffer = Vec::new();
+            entry.read_to_end(&mut buffer)?;
+
+            fs::write(dest_path, buffer)?;
+
+            // Make executable
+            let mut perms = fs::metadata(dest_path)?.permissions();
+            perms.set_mode(0o755);
+            fs::set_permissions(dest_path, perms)?;
+
+            return Ok(());
+        }
+    }
+
+    Err(Error::Other(
+        "ORAS binary not found in tar archive".to_string(),
+    ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::env;
+    use tempfile::TempDir;
+
+    fn setup_test_config() -> (Config, TempDir) {
+        let temp_dir = TempDir::new().unwrap();
+        env::set_var(
+            "MEDA_ASSET_DIR",
+            temp_dir.path().join("assets").to_str().unwrap(),
+        );
+        env::set_var("MEDA_VM_DIR", temp_dir.path().join("vms").to_str().unwrap());
+        let config = Config::new().unwrap();
+        env::remove_var("MEDA_ASSET_DIR");
+        env::remove_var("MEDA_VM_DIR");
+        (config, temp_dir)
+    }
+
+    #[test]
+    fn test_check_vm_running_no_pid_file() {
+        let (config, _temp_dir) = setup_test_config();
+        let result = check_vm_running(&config, "nonexistent-vm").unwrap();
+        assert!(!result);
+    }
+
+    #[test]
+    fn test_check_vm_running_invalid_pid() {
+        let (config, _temp_dir) = setup_test_config();
+
+        // Create VM directory with invalid PID file
+        let vm_dir = config.vm_dir("test-vm");
+        std::fs::create_dir_all(&vm_dir).unwrap();
+        std::fs::write(vm_dir.join("pid"), "invalid_pid").unwrap();
+
+        let result = check_vm_running(&config, "test-vm").unwrap();
+        assert!(!result);
+    }
+
+    #[test]
+    fn test_check_vm_running_nonexistent_pid() {
+        let (config, _temp_dir) = setup_test_config();
+
+        // Create VM directory with nonexistent PID
+        let vm_dir = config.vm_dir("test-vm");
+        std::fs::create_dir_all(&vm_dir).unwrap();
+        std::fs::write(vm_dir.join("pid"), "999999").unwrap();
+
+        let result = check_vm_running(&config, "test-vm").unwrap();
+        assert!(!result);
+    }
+
+    #[test]
+    fn test_get_vm_ip() {
+        let (config, _temp_dir) = setup_test_config();
+
+        // Create VM directory with subnet
+        let vm_dir = config.vm_dir("test-vm");
+        std::fs::create_dir_all(&vm_dir).unwrap();
+        std::fs::write(vm_dir.join("subnet"), "192.168.100").unwrap();
+
+        let ip = get_vm_ip(&config, "test-vm").unwrap();
+        assert_eq!(ip, "192.168.100.2");
+    }
+
+    #[test]
+    fn test_get_vm_ip_missing_subnet() {
+        let (config, _temp_dir) = setup_test_config();
+
+        let result = get_vm_ip(&config, "nonexistent-vm");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_get_vm_memory_no_start_script() {
+        let (config, _temp_dir) = setup_test_config();
+
+        // Create VM directory without start script
+        let vm_dir = config.vm_dir("test-vm");
+        std::fs::create_dir_all(&vm_dir).unwrap();
+
+        let memory = get_vm_memory(&config, "test-vm").unwrap();
+        assert_eq!(memory, config.mem);
+    }
+
+    #[test]
+    fn test_get_vm_memory_with_start_script() {
+        let (config, _temp_dir) = setup_test_config();
+
+        // Create VM directory with start script containing memory setting
+        let vm_dir = config.vm_dir("test-vm");
+        std::fs::create_dir_all(&vm_dir).unwrap();
+        let start_script = format!(
+            "#!/bin/bash\n{} --memory size=2048M --cpus boot=4",
+            config.ch_bin.display()
+        );
+        std::fs::write(vm_dir.join("start.sh"), start_script).unwrap();
+
+        let memory = get_vm_memory(&config, "test-vm").unwrap();
+        assert_eq!(memory, "2048M");
+    }
+
+    #[test]
+    fn test_get_vm_disk_size_no_rootfs() {
+        let (config, _temp_dir) = setup_test_config();
+
+        // Create VM directory without rootfs file
+        let vm_dir = config.vm_dir("test-vm");
+        std::fs::create_dir_all(&vm_dir).unwrap();
+
+        let disk_size = get_vm_disk_size(&config, "test-vm").unwrap();
+        assert_eq!(disk_size, config.disk_size);
+    }
+
+    #[tokio::test]
+    async fn test_list_empty_vm_dir() {
+        let (config, _temp_dir) = setup_test_config();
+
+        // Should not error when VM directory doesn't exist
+        let result = list(&config, true).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_get_nonexistent_vm() {
+        let (config, _temp_dir) = setup_test_config();
+
+        let result = get(&config, "nonexistent-vm", true).await;
+        assert!(result.is_err());
+        assert!(matches!(result.unwrap_err(), Error::VmNotFound(_)));
+    }
+
+    #[tokio::test]
+    async fn test_start_nonexistent_vm() {
+        let (config, _temp_dir) = setup_test_config();
+
+        let result = start(&config, "nonexistent-vm", true).await;
+        assert!(result.is_err());
+        assert!(matches!(result.unwrap_err(), Error::VmNotFound(_)));
+    }
+
+    #[tokio::test]
+    async fn test_stop_nonexistent_vm() {
+        let (config, _temp_dir) = setup_test_config();
+
+        let result = stop(&config, "nonexistent-vm", true).await;
+        assert!(result.is_err());
+        assert!(matches!(result.unwrap_err(), Error::VmNotFound(_)));
+    }
+
+    #[tokio::test]
+    async fn test_delete_nonexistent_vm() {
+        let (config, _temp_dir) = setup_test_config();
+
+        let result = delete(&config, "nonexistent-vm", true).await;
+        assert!(result.is_err());
+        assert!(matches!(result.unwrap_err(), Error::VmNotFound(_)));
+    }
 }
