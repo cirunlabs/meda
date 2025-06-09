@@ -29,6 +29,9 @@ async fn main() -> Result<()> {
             name,
             user_data,
             force,
+            memory,
+            cpus,
+            disk,
         } => {
             if force {
                 if !cli.json {
@@ -48,7 +51,13 @@ async fn main() -> Result<()> {
                     vm::delete(&config, &name, cli.json).await?;
                 }
             }
-            vm::create(&config, &name, user_data.as_deref(), cli.json).await?;
+            let resources = vm::VmResources::from_config_with_overrides(
+                &config,
+                memory.as_deref(),
+                cpus,
+                disk.as_deref(),
+            );
+            vm::create(&config, &name, user_data.as_deref(), &resources, cli.json).await?;
         }
         Commands::List => {
             vm::list(&config, cli.json).await?;
@@ -184,13 +193,23 @@ async fn main() -> Result<()> {
             org,
             user_data,
             no_start,
+            memory,
+            cpus,
+            disk,
         } => {
+            let resources = vm::VmResources::from_config_with_overrides(
+                &config,
+                memory.as_deref(),
+                cpus,
+                disk.as_deref(),
+            );
             let options = image::RunOptions {
                 vm_name: name.as_deref(),
                 registry: registry.as_deref(),
                 org: org.as_deref(),
                 user_data_path: user_data.as_deref(),
                 no_start,
+                resources,
             };
             image::run_from_image(&config, &image, options, cli.json).await?;
         }

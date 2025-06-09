@@ -24,6 +24,18 @@ pub enum Commands {
         /// Force create (delete if exists)
         #[arg(short, long)]
         force: bool,
+
+        /// Memory size (e.g., 1G, 2048M, 512M)
+        #[arg(long)]
+        memory: Option<String>,
+
+        /// Number of CPUs
+        #[arg(long)]
+        cpus: Option<u8>,
+
+        /// Disk size (e.g., 10G, 20G, 5120M)
+        #[arg(long)]
+        disk: Option<String>,
     },
 
     /// List all VMs
@@ -180,5 +192,17 @@ pub enum Commands {
         /// Don't start the VM, just create it
         #[arg(long)]
         no_start: bool,
+
+        /// Memory size (e.g., 1G, 2048M, 512M)
+        #[arg(long)]
+        memory: Option<String>,
+
+        /// Number of CPUs
+        #[arg(long)]
+        cpus: Option<u8>,
+
+        /// Disk size (e.g., 10G, 20G, 5120M)
+        #[arg(long)]
+        disk: Option<String>,
     },
 }

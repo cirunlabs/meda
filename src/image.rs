@@ -10,13 +10,13 @@ use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
-#[derive(Default)]
 pub struct RunOptions<'a> {
     pub vm_name: Option<&'a str>,
     pub registry: Option<&'a str>,
     pub org: Option<&'a str>,
     pub user_data_path: Option<&'a str>,
     pub no_start: bool,
+    pub resources: crate::vm::VmResources,
 }
 
 #[derive(Serialize)]
@@ -1380,6 +1380,21 @@ pub async fn run_from_image(
                 info!("📦 Copying base image to VM directory");
             }
             fs::copy(&source_image, &vm_rootfs)?;
+
+            // Resize disk if different from config default
+            if options.resources.disk_size != config.disk_size {
+                if !json {
+                    info!("Resizing disk to {}", options.resources.disk_size);
+                }
+                crate::util::run_command(
+                    "qemu-img",
+                    &[
+                        "resize",
+                        vm_rootfs.to_str().unwrap(),
+                        &options.resources.disk_size,
+                    ],
+                )?;
+            }
         } else {
             return Err(Error::Other(format!(
                 "Base image artifact '{}' not found in image",
@@ -1414,6 +1429,11 @@ pub async fn run_from_image(
     // Store network config
     crate::util::write_string_to_file(&vm_dir.join("subnet"), &subnet)?;
     crate::util::write_string_to_file(&vm_dir.join("tapdev"), &tap_name)?;
+
+    // Store VM resource configuration
+    crate::util::write_string_to_file(&vm_dir.join("memory"), &options.resources.memory)?;
+    crate::util::write_string_to_file(&vm_dir.join("cpus"), &options.resources.cpus.to_string())?;
+    crate::util::write_string_to_file(&vm_dir.join("disk_size"), &options.resources.disk_size)?;
 
     // Create or use provided cloud-init files
     if !vm_dir.join("meta-data").exists() {
@@ -1527,8 +1547,8 @@ fi
         config.ch_bin.display(),
         vm_dir.display(),
         config.fw_bin.display(),
-        config.cpus,
-        config.mem,
+        options.resources.cpus,
+        options.resources.memory,
         vm_dir.display(),
         vm_dir.display(),
         tap_name,
