@@ -125,11 +125,11 @@ cargo tarpaulin --out html --output-dir ./coverage
 
 1. **Clippy warnings**: Fix all warnings or use `#[allow(...)]` for intentional cases
 2. **Format issues**: Run `cargo fmt` locally
-3. **Line ending issues**: 
+3. **Line ending issues**:
    - Convert Windows line endings: `dos2unix src/*.rs`
    - Check encoding: `file src/*.rs` (should show ASCII or UTF-8 text)
    - Files detected as "C source, ASCII text" are acceptable for Rust files
-4. **Unit test failures**: 
+4. **Unit test failures**:
    - For binary crates: use `cargo test --bins` instead of `cargo test --lib`
    - Check locally: `cargo test --bins` (unit tests) or `cargo test` (all tests)
 5. **Test failures**: Ensure tests pass locally with system dependencies installed

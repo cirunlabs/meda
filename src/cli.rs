@@ -205,4 +205,15 @@ pub enum Commands {
         #[arg(long)]
         disk: Option<String>,
     },
+
+    /// Start REST API server
+    Serve {
+        /// Port to bind to (default: 7777)
+        #[arg(long, short, default_value = "7777")]
+        port: u16,
+
+        /// Host to bind to (default: 127.0.0.1)
+        #[arg(long, default_value = "127.0.0.1")]
+        host: String,
+    },
 }
