@@ -218,7 +218,7 @@ async fn main() -> Result<()> {
         Commands::Serve { port, host } => {
             info!("Starting Meda API server on {}:{}", host, port);
             let config_arc = Arc::new(config);
-            let app = api::create_router(config_arc);
+            let app = api::create_router(config_arc, &host, port);
 
             let listener = tokio::net::TcpListener::bind(format!("{}:{}", host, port)).await?;
             info!("API server running on http://{}:{}", host, port);

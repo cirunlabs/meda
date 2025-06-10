@@ -20,7 +20,7 @@ RUST_LOG=info meda serve
 ### API Documentation
 
 - **Swagger UI**: `http://localhost:7777/swagger-ui`
-- **OpenAPI Spec**: `http://localhost:7777/api/v1/openapi.json`  
+- **OpenAPI Spec**: `http://localhost:7777/api/v1/openapi.json` (served by Swagger UI)
 - **Base URL**: `http://localhost:7777/api/v1`
 
 ## Architecture
@@ -286,7 +286,7 @@ GET /api/v1/health
 ```json
 {
   "status": "healthy",
-  "version": "0.1.0", 
+  "version": "0.1.0",
   "timestamp": "2024-01-15T10:30:00Z"
 }
 ```
@@ -306,7 +306,7 @@ curl -X POST http://localhost:7777/api/v1/vms \
     "disk": "20G"
   }'
 
-# Start VM  
+# Start VM
 curl -X POST http://localhost:7777/api/v1/vms/api-test/start
 
 # Get VM IP

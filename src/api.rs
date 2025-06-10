@@ -1,5 +1,4 @@
 use axum::{
-    response::Json,
     routing::{delete, get, post},
     Router,
 };
@@ -22,7 +21,18 @@ pub struct AppState {
 }
 
 /// Create the main API router with all endpoints
-pub fn create_router(config: Arc<Config>) -> Router {
+pub fn create_router(config: Arc<Config>, host: &str, port: u16) -> Router {
+    // When binding to 0.0.0.0, we want to allow the swagger UI to use the browser's current host
+    // This way it will work whether accessed via localhost, VM IP, or any other accessible address
+    let base_url = if host == "0.0.0.0" {
+        // Use a relative base URL so the browser uses whatever host it's currently on
+        String::new() // Empty string will make requests relative to current host
+    } else if host == "127.0.0.1" {
+        format!("http://localhost:{}", port)
+    } else {
+        format!("http://{}:{}", host, port)
+    };
+
     let state = AppState { config };
 
     Router::new()
@@ -40,14 +50,10 @@ pub fn create_router(config: Arc<Config>) -> Router {
         .route("/api/v1/images/push", post(push_image))
         .route("/api/v1/images/prune", post(prune_images))
         .route("/api/v1/images/run", post(run_from_image))
-        // Health check and docs
+        // Health check
         .route("/api/v1/health", get(health_check))
-        .route("/api/v1/openapi.json", get(openapi_spec))
-        // Swagger UI
-        .merge(
-            utoipa_swagger_ui::SwaggerUi::new("/swagger-ui")
-                .url("/api/v1/openapi.json", ApiDoc::openapi()),
-        )
+        // Swagger UI with dynamic OpenAPI spec
+        .merge(create_swagger_ui(&base_url))
         .layer(
             ServiceBuilder::new()
                 .layer(TraceLayer::new_for_http())
@@ -83,6 +89,7 @@ pub fn create_router(config: Arc<Config>) -> Router {
             models::VmResponse,
             models::VmListResponse,
             models::VmDetailResponse,
+            models::VmInfo,
             models::PortForwardRequest,
             models::ImageListResponse,
             models::ImageCreateRequest,
@@ -90,6 +97,7 @@ pub fn create_router(config: Arc<Config>) -> Router {
             models::ImagePushRequest,
             models::ImagePruneRequest,
             models::ImageRunRequest,
+            models::ImageInfo,
             models::ApiError,
             models::HealthResponse,
         )
@@ -111,14 +119,27 @@ pub fn create_router(config: Arc<Config>) -> Router {
             name = "MIT",
             url = "https://opensource.org/licenses/MIT"
         )
-    ),
-    servers(
-        (url = "http://localhost:7777", description = "Local development server")
     )
 )]
 pub struct ApiDoc;
 
-/// Get OpenAPI specification
-async fn openapi_spec() -> Json<utoipa::openapi::OpenApi> {
-    Json(ApiDoc::openapi())
+/// Create Swagger UI with dynamic OpenAPI spec
+fn create_swagger_ui(base_url: &str) -> Router<AppState> {
+    let mut openapi = ApiDoc::openapi();
+
+    // When host is 0.0.0.0, use relative URL so it works with any host the browser uses
+    let server_url = if base_url.is_empty() {
+        "/".to_string() // Relative URL - will use current browser host
+    } else {
+        base_url.to_string()
+    };
+    // Update server URL with the actual host/port
+    openapi.servers = Some(vec![utoipa::openapi::ServerBuilder::new()
+        .url(server_url)
+        .description(Some("Meda API Server"))
+        .build()]);
+
+    utoipa_swagger_ui::SwaggerUi::new("/swagger-ui")
+        .url("/api/v1/openapi.json", openapi)
+        .into()
 }

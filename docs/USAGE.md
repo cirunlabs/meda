@@ -29,7 +29,7 @@ meda create <NAME> [USER_DATA] [--force]
 
 **Output:**
 - Standard output: Progress information and success/failure message
-- JSON output: 
+- JSON output:
   ```json
   {
     "success": true|false,
