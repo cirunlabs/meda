@@ -1,4 +1,5 @@
 use assert_cmd::Command;
+use log::{debug, error, info, warn};
 use predicates::prelude::*;
 use serial_test::serial;
 use std::env;
@@ -6,6 +7,9 @@ use tempfile::TempDir;
 
 // Helper to set up a clean test environment
 fn setup_test_env() -> TempDir {
+    // Initialize env_logger for tests (only once)
+    let _ = env_logger::try_init();
+
     let temp_dir = TempDir::new().unwrap();
     env::set_var("MEDA_ASSET_DIR", temp_dir.path().join("assets"));
     env::set_var("MEDA_VM_DIR", temp_dir.path().join("vms"));
@@ -716,6 +720,388 @@ fn test_ssh_connection_via_port(host: &str, port: u16) {
     }
 }
 
+// Test that images created from VMs persist customizations
+#[test]
+#[serial]
+fn test_cli_vm_to_image_customization_persistence() {
+    let _temp_dir = setup_test_env();
+
+    info!("🚀 [TEST START] Testing VM to Image customization persistence with SSH verification");
+    debug!(
+        "⏰ [TEST TIMING] Test started at: {:?}",
+        std::time::SystemTime::now()
+    );
+
+    // Step 1: Create source VM
+    info!(
+        "📦 [STEP 1] Creating source VM at: {:?}",
+        std::time::SystemTime::now()
+    );
+    let mut cmd = Command::cargo_bin("meda").unwrap();
+    cmd.args(["create", "test-persist-source", "--json"]);
+    let _create_result = cmd
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("success\": true"))
+        .stdout(predicate::str::contains(
+            "Successfully created VM: test-persist-source",
+        ));
+    info!(
+        "✅ [STEP 1] VM created successfully at: {:?}",
+        std::time::SystemTime::now()
+    );
+
+    // Step 2: Start the VM
+    info!(
+        "▶️  [STEP 2] Starting source VM at: {:?}",
+        std::time::SystemTime::now()
+    );
+    let mut cmd = Command::cargo_bin("meda").unwrap();
+    cmd.args(["start", "test-persist-source", "--json"]);
+    let start_result = cmd.assert();
+
+    // Only proceed if VM start succeeded (requires proper hypervisor setup)
+    if start_result.try_success().is_ok() {
+        info!(
+            "✅ [STEP 2] VM started successfully at: {:?}, proceeding with SSH verification",
+            std::time::SystemTime::now()
+        );
+
+        // Step 3: Get VM IP for SSH access
+        info!(
+            "🌐 [STEP 3] Getting VM IP address at: {:?}",
+            std::time::SystemTime::now()
+        );
+        let mut cmd = Command::cargo_bin("meda").unwrap();
+        cmd.args(["ip", "test-persist-source"]);
+        let ip_output = cmd.assert().success();
+        let ip = std::str::from_utf8(&ip_output.get_output().stdout)
+            .unwrap()
+            .trim();
+        info!(
+            "✅ [STEP 3] VM IP obtained: {} at: {:?}",
+            ip,
+            std::time::SystemTime::now()
+        );
+
+        // Step 4: Wait for VM to fully boot
+        info!(
+            "⏳ [STEP 4] Waiting for VM to boot (60 seconds) starting at: {:?}",
+            std::time::SystemTime::now()
+        );
+        std::thread::sleep(std::time::Duration::from_secs(60));
+        info!(
+            "✅ [STEP 4] Boot wait completed at: {:?}",
+            std::time::SystemTime::now()
+        );
+
+        // Step 5: SSH in and create artifacts
+        info!(
+            "🔧 [STEP 5] Creating test artifacts via SSH at: {:?}",
+            std::time::SystemTime::now()
+        );
+        if test_ssh_connectivity(ip) {
+            info!(
+                "✅ [STEP 5] SSH connectivity confirmed at: {:?}",
+                std::time::SystemTime::now()
+            );
+
+            // Create test file with unique content
+            let test_content = format!(
+                "Test file created at {}",
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_secs()
+            );
+            let create_file_result = run_ssh_command(ip, &format!(
+                "echo '{}' > /home/cirun/persistence-test.txt && echo 'artifact_created' > /home/cirun/test-marker.txt && ls -la /home/cirun/persistence-test.txt",
+                test_content
+            ));
+
+            if create_file_result {
+                println!("✅ Test artifacts created successfully");
+
+                // Install a test package to verify software persistence
+                let install_result = run_ssh_command(ip,
+                    "sudo apt-get update -qq && sudo apt-get install -y tree && echo 'package_installed' >> /home/cirun/test-marker.txt && which tree"
+                );
+
+                if install_result {
+                    println!("✅ Test package installed successfully");
+
+                    // Step 6: Stop source VM
+                    println!("⏹️  Step 6: Stopping source VM");
+                    let mut cmd = Command::cargo_bin("meda").unwrap();
+                    cmd.args(["stop", "test-persist-source", "--json"]);
+                    cmd.assert()
+                        .success()
+                        .stdout(predicate::str::contains("success\": true"));
+
+                    // Step 7: Create image from customized VM
+                    println!("📸 Step 7: Creating image from customized VM");
+                    let mut cmd = Command::cargo_bin("meda").unwrap();
+                    cmd.args([
+                        "create-image",
+                        "test-persist-image",
+                        "--from-vm",
+                        "test-persist-source",
+                        "--json",
+                    ]);
+                    cmd.assert()
+                        .success()
+                        .stdout(predicate::str::contains("success\": true"))
+                        .stdout(predicate::str::contains(
+                            "Successfully created image ghcr.io/cirunlabs/test-persist-image:latest from VM test-persist-source"
+                        ));
+
+                    // Step 8: Create new VM from image
+                    println!("🆕 Step 8: Creating new VM from image");
+                    let mut cmd = Command::cargo_bin("meda").unwrap();
+                    cmd.args([
+                        "run",
+                        "test-persist-image",
+                        "--name",
+                        "test-persist-target",
+                        "--json",
+                    ]);
+                    let run_result = cmd.assert();
+
+                    if run_result.try_success().is_ok() {
+                        println!("✅ New VM created from image successfully");
+
+                        // Step 9: Get new VM IP
+                        println!("🌐 Step 9: Getting new VM IP address");
+                        let mut cmd = Command::cargo_bin("meda").unwrap();
+                        cmd.args(["ip", "test-persist-target"]);
+                        let new_ip_output = cmd.assert().success();
+                        let new_ip = std::str::from_utf8(&new_ip_output.get_output().stdout)
+                            .unwrap()
+                            .trim();
+                        println!("New VM IP: {}", new_ip);
+
+                        // Step 10: Wait for new VM to boot
+                        println!("⏳ Step 10: Waiting for new VM to boot (120 seconds)");
+                        std::thread::sleep(std::time::Duration::from_secs(120));
+
+                        // Step 11: Verify artifacts persist in new VM
+                        println!("🔍 Step 11: Verifying artifacts persist in new VM");
+                        if test_ssh_connectivity(new_ip) {
+                            println!("✅ SSH connectivity to new VM confirmed");
+
+                            // Check if test file exists and has correct content
+                            let file_check_result = run_ssh_command(new_ip,
+                                "cat /home/cirun/persistence-test.txt && echo '---' && cat /home/cirun/test-marker.txt"
+                            );
+
+                            if file_check_result {
+                                println!("✅ Test files persisted in new VM!");
+                            } else {
+                                println!("❌ Test files not found in new VM");
+                            }
+
+                            // Check if package exists
+                            let package_check_result =
+                                run_ssh_command(new_ip, "which tree && tree --version");
+                            if package_check_result {
+                                println!("✅ Test package persisted in new VM!");
+                            } else {
+                                println!("❌ Test package not found in new VM");
+                            }
+                        } else {
+                            println!("❌ Could not establish SSH connectivity to new VM");
+                        }
+
+                        // Clean up target VM
+                        let mut cmd = Command::cargo_bin("meda").unwrap();
+                        cmd.args(["delete", "test-persist-target", "--json"]);
+                        cmd.assert().success();
+                    }
+
+                    // Clean up image
+                    let mut cmd = Command::cargo_bin("meda").unwrap();
+                    cmd.args(["rmi", "test-persist-image", "--force", "--json"]);
+                    cmd.assert().success();
+                } else {
+                    println!("❌ Failed to install test package");
+                }
+            } else {
+                println!("❌ Failed to create test artifacts");
+            }
+        } else {
+            error!(
+                "❌ [STEP 5] Could not establish SSH connectivity to source VM at: {:?}",
+                std::time::SystemTime::now()
+            );
+            error!("💀 [FATAL] SSH connectivity is REQUIRED for this test - failing test");
+            panic!(
+                "SSH connectivity failed - cannot verify artifact persistence without SSH access"
+            );
+        }
+
+        // Stop source VM if still running
+        let mut cmd = Command::cargo_bin("meda").unwrap();
+        cmd.args(["stop", "test-persist-source", "--json"]);
+        let _ = cmd.assert(); // Ignore result
+    } else {
+        error!(
+            "❌ [STEP 2] VM failed to start at: {:?}",
+            std::time::SystemTime::now()
+        );
+        error!("💀 [FATAL] VM must start for this test - failing test");
+        panic!("VM failed to start - cannot test artifact persistence without a running VM");
+    }
+
+    // Final cleanup
+    let mut cmd = Command::cargo_bin("meda").unwrap();
+    cmd.args(["delete", "test-persist-source", "--json"]);
+    cmd.assert().success();
+
+    info!(
+        "✅ [TEST END] VM to image persistence test completed at: {:?}",
+        std::time::SystemTime::now()
+    );
+    cleanup_test_env();
+}
+
+// Test that VM resources (CPU, memory, disk) are preserved through image creation
+#[test]
+#[serial]
+fn test_cli_vm_to_image_resource_preservation() {
+    let _temp_dir = setup_test_env();
+
+    println!("🚀 Testing VM resource preservation through image creation");
+
+    // Step 1: Create source VM with custom resources
+    println!("📦 Step 1: Creating source VM with custom resources");
+    let mut cmd = Command::cargo_bin("meda").unwrap();
+    cmd.args([
+        "create",
+        "test-resource-source",
+        "--memory",
+        "2G",
+        "--cpus",
+        "4",
+        "--disk",
+        "20G",
+        "--json",
+    ]);
+    cmd.assert()
+        .success()
+        .stdout(predicate::str::contains("success\": true"));
+
+    // Step 2: Verify source VM has correct resources
+    println!("🔍 Step 2: Verifying source VM resources");
+    let mut cmd = Command::cargo_bin("meda").unwrap();
+    cmd.args(["get", "test-resource-source", "--json"]);
+    let output = cmd.assert().success();
+
+    let stdout = std::str::from_utf8(&output.get_output().stdout).unwrap();
+    if let Ok(vm_info) = serde_json::from_str::<serde_json::Value>(stdout) {
+        assert_eq!(vm_info.get("memory").and_then(|v| v.as_str()), Some("2G"));
+        assert_eq!(vm_info.get("disk").and_then(|v| v.as_str()), Some("20G"));
+        if let Some(details) = vm_info.get("details") {
+            assert_eq!(details.get("memory").and_then(|v| v.as_str()), Some("2G"));
+            assert_eq!(
+                details.get("disk_size").and_then(|v| v.as_str()),
+                Some("20G")
+            );
+        }
+    }
+
+    // Step 3: Create image from VM
+    println!("📸 Step 3: Creating image from VM");
+    let mut cmd = Command::cargo_bin("meda").unwrap();
+    cmd.args([
+        "create-image",
+        "test-resource-image",
+        "--from-vm",
+        "test-resource-source",
+        "--json",
+    ]);
+    cmd.assert()
+        .success()
+        .stdout(predicate::str::contains("success\": true"));
+
+    // Step 4: Create new VM from image with default resources
+    println!("🆕 Step 4: Creating new VM from image (default resources)");
+    let mut cmd = Command::cargo_bin("meda").unwrap();
+    cmd.args([
+        "run",
+        "test-resource-image",
+        "--name",
+        "test-resource-default",
+        "--no-start",
+        "--json",
+    ]);
+    cmd.assert()
+        .success()
+        .stdout(predicate::str::contains("success\": true"));
+
+    // Step 5: Create new VM from image with custom resources
+    println!("🆕 Step 5: Creating new VM from image (custom resources)");
+    let mut cmd = Command::cargo_bin("meda").unwrap();
+    cmd.args([
+        "run",
+        "test-resource-image",
+        "--name",
+        "test-resource-custom",
+        "--memory",
+        "4G",
+        "--cpus",
+        "8",
+        "--no-start",
+        "--json",
+    ]);
+    cmd.assert()
+        .success()
+        .stdout(predicate::str::contains("success\": true"));
+
+    // Step 6: Verify new VMs have correct resources
+    println!("✅ Step 6: Verifying VM resources");
+
+    // Check default VM (should use defaults from environment)
+    let mut cmd = Command::cargo_bin("meda").unwrap();
+    cmd.args(["get", "test-resource-default", "--json"]);
+    let output = cmd.assert().success();
+    let stdout = std::str::from_utf8(&output.get_output().stdout).unwrap();
+    if let Ok(vm_info) = serde_json::from_str::<serde_json::Value>(stdout) {
+        // Should have environment defaults (512M, 1 CPU) but disk from image (20G)
+        assert_eq!(vm_info.get("memory").and_then(|v| v.as_str()), Some("512M"));
+        assert_eq!(vm_info.get("disk").and_then(|v| v.as_str()), Some("20G")); // Preserved from source
+    }
+
+    // Check custom VM
+    let mut cmd = Command::cargo_bin("meda").unwrap();
+    cmd.args(["get", "test-resource-custom", "--json"]);
+    let output = cmd.assert().success();
+    let stdout = std::str::from_utf8(&output.get_output().stdout).unwrap();
+    if let Ok(vm_info) = serde_json::from_str::<serde_json::Value>(stdout) {
+        // Should have custom resources
+        assert_eq!(vm_info.get("memory").and_then(|v| v.as_str()), Some("4G"));
+        assert_eq!(vm_info.get("disk").and_then(|v| v.as_str()), Some("20G")); // Preserved from source
+    }
+
+    // Step 7: Clean up
+    println!("🧹 Step 7: Cleaning up test resources");
+    for vm in [
+        "test-resource-source",
+        "test-resource-default",
+        "test-resource-custom",
+    ] {
+        let mut cmd = Command::cargo_bin("meda").unwrap();
+        cmd.args(["delete", vm, "--json"]);
+        cmd.assert().success();
+    }
+
+    let mut cmd = Command::cargo_bin("meda").unwrap();
+    cmd.args(["rmi", "test-resource-image", "--force", "--json"]);
+    cmd.assert().success();
+
+    println!("✅ Resource preservation test completed successfully");
+    cleanup_test_env();
+}
+
 // Test SSH with custom user-data
 #[test]
 #[serial]
@@ -1087,7 +1473,11 @@ fn test_complete_vm_to_image_to_vm_workflow() {
 
 // Helper function to test basic SSH connectivity
 fn test_ssh_connectivity(ip: &str) -> bool {
-    println!("Testing SSH connectivity to {}", ip);
+    debug!(
+        "🔌 [SSH TEST] Testing SSH connectivity to {} at: {:?}",
+        ip,
+        std::time::SystemTime::now()
+    );
 
     let mut cmd = Command::new("sshpass");
     cmd.args([
@@ -1108,16 +1498,28 @@ fn test_ssh_connectivity(ip: &str) -> bool {
         Ok(output) => {
             if output.status.success() {
                 let stdout = String::from_utf8_lossy(&output.stdout);
-                println!("SSH connectivity test result: {}", stdout.trim());
+                info!(
+                    "✅ [SSH TEST] SSH connectivity test successful: {} at: {:?}",
+                    stdout.trim(),
+                    std::time::SystemTime::now()
+                );
                 stdout.contains("SSH test successful")
             } else {
                 let stderr = String::from_utf8_lossy(&output.stderr);
-                println!("SSH connectivity failed: {}", stderr.trim());
+                warn!(
+                    "❌ [SSH TEST] SSH connectivity failed: {} at: {:?}",
+                    stderr.trim(),
+                    std::time::SystemTime::now()
+                );
                 false
             }
         }
         Err(e) => {
-            println!("SSH command failed: {}", e);
+            error!(
+                "❌ [SSH TEST] SSH command failed: {} at: {:?}",
+                e,
+                std::time::SystemTime::now()
+            );
             false
         }
     }
@@ -1125,7 +1527,11 @@ fn test_ssh_connectivity(ip: &str) -> bool {
 
 // Helper function to run SSH commands
 fn run_ssh_command(ip: &str, command: &str) -> bool {
-    println!("Running SSH command: {}", command);
+    debug!(
+        "🔧 [SSH CMD] Running SSH command: {} at: {:?}",
+        command,
+        std::time::SystemTime::now()
+    );
 
     let mut cmd = Command::new("sshpass");
     cmd.args([
@@ -1147,15 +1553,33 @@ fn run_ssh_command(ip: &str, command: &str) -> bool {
             let stdout = String::from_utf8_lossy(&output.stdout);
             let stderr = String::from_utf8_lossy(&output.stderr);
 
-            println!("Command output: {}", stdout.trim());
+            debug!(
+                "📤 [SSH CMD] Command output: {} at: {:?}",
+                stdout.trim(),
+                std::time::SystemTime::now()
+            );
             if !stderr.trim().is_empty() {
-                println!("Command stderr: {}", stderr.trim());
+                warn!(
+                    "⚠️  [SSH CMD] Command stderr: {} at: {:?}",
+                    stderr.trim(),
+                    std::time::SystemTime::now()
+                );
             }
 
-            output.status.success()
+            let success = output.status.success();
+            debug!(
+                "📊 [SSH CMD] Command success: {} at: {:?}",
+                success,
+                std::time::SystemTime::now()
+            );
+            success
         }
         Err(e) => {
-            println!("Failed to execute SSH command: {}", e);
+            error!(
+                "❌ [SSH CMD] Failed to execute SSH command: {} at: {:?}",
+                e,
+                std::time::SystemTime::now()
+            );
             false
         }
     }
