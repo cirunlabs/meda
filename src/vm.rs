@@ -4,6 +4,7 @@ use crate::network::{cleanup_networking, generate_random_mac, setup_networking};
 use crate::util::{
     check_process_running, download_file, ensure_dependency, run_command, write_string_to_file,
 };
+use backon::{BlockingRetryable, ExponentialBuilder};
 use log::info;
 use serde::Serialize;
 use std::fs;
@@ -54,6 +55,8 @@ pub struct VmDetailedInfo {
     pub name: String,
     pub state: String,
     pub ip: Option<String>,
+    pub memory: Option<String>,
+    pub disk: Option<String>,
     pub details: Option<serde_json::Value>,
 }
 
@@ -525,10 +528,16 @@ pub async fn get(config: &Config, name: &str, json: bool) -> Result<()> {
         serde_json::Value::String(vm_dir.to_string_lossy().to_string()),
     );
 
+    // Get memory and disk info for top-level fields
+    let memory = get_vm_memory(config, name).unwrap_or_else(|_| config.mem.clone());
+    let disk_size = get_vm_disk_size(config, name).unwrap_or_else(|_| config.disk_size.clone());
+
     let vm_info = VmDetailedInfo {
         name: name.to_string(),
         state,
         ip,
+        memory: Some(memory),
+        disk: Some(disk_size),
         details: Some(serde_json::Value::Object(details)),
     };
 
@@ -586,12 +595,41 @@ pub async fn start(config: &Config, name: &str, json: bool) -> Result<()> {
     // Run the start script
     run_command("bash", &[start_script.to_str().unwrap()])?;
 
-    // Wait a moment for the VM to start
-    thread::sleep(Duration::from_secs(3));
+    // Use retry with exponential backoff to check if VM is running
+    let vm_name = name.to_string();
+    let config_clone = config.clone();
 
-    // Verify VM is running
-    if !check_vm_running(config, name)? {
-        return Err(Error::Other(format!("Failed to start VM: {}", name)));
+    let check_vm_running_retry = || {
+        if check_vm_running(&config_clone, &vm_name)? {
+            Ok(())
+        } else {
+            Err(Error::Other(format!("VM {} not yet running", vm_name)))
+        }
+    };
+
+    let retry_result = check_vm_running_retry
+        .retry(
+            &ExponentialBuilder::default()
+                .with_min_delay(Duration::from_millis(500)) // Start with 500ms
+                .with_max_delay(Duration::from_secs(5)) // Max 5 seconds between retries
+                .with_max_times(12), // Try up to 12 times (total ~30s)
+        )
+        .call();
+
+    if retry_result.is_err() {
+        // Try to get more detailed error information
+        let vm_dir = config.vm_dir(name);
+        let log_file = vm_dir.join("ch.log");
+        let log_contents = if log_file.exists() {
+            fs::read_to_string(&log_file).unwrap_or_else(|_| "Could not read log file".to_string())
+        } else {
+            "Log file not found".to_string()
+        };
+
+        return Err(Error::Other(format!(
+            "Failed to start VM: {} after retries. Log contents: {}",
+            name, log_contents
+        )));
     }
 
     let message = format!("Successfully started VM: {}", name);

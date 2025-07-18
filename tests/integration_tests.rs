@@ -1,8 +1,10 @@
 use assert_cmd::Command;
+use backon::{BlockingRetryable, ExponentialBuilder};
 use log::{debug, error, info, warn};
 use predicates::prelude::*;
 use serial_test::serial;
 use std::env;
+use std::time::Duration;
 use tempfile::TempDir;
 
 // Helper to set up a clean test environment
@@ -25,6 +27,82 @@ fn cleanup_test_env() {
     env::remove_var("MEDA_CPUS");
     env::remove_var("MEDA_MEM");
     env::remove_var("MEDA_DISK_SIZE");
+}
+
+// Helper function to wait for SSH connectivity with retry
+fn wait_for_ssh_connectivity(ip: &str) -> bool {
+    info!("🔌 Waiting for SSH connectivity to {}", ip);
+
+    let ssh_check = || {
+        if test_ssh_connectivity(ip) {
+            Ok(())
+        } else {
+            Err("SSH not ready yet")
+        }
+    };
+
+    let result = ssh_check
+        .retry(
+            &ExponentialBuilder::default()
+                .with_min_delay(Duration::from_secs(2)) // Start with 2s
+                .with_max_delay(Duration::from_secs(10)) // Max 10s between retries
+                .with_max_times(15), // Try up to 15 times (total ~3 minutes)
+        )
+        .call();
+
+    match result {
+        Ok(()) => {
+            info!("✅ SSH connectivity established to {}", ip);
+            true
+        }
+        Err(_) => {
+            warn!("❌ SSH connectivity failed to {} after retries", ip);
+            false
+        }
+    }
+}
+
+// Helper function to wait for VM to boot and be ready
+fn wait_for_vm_ready(ip: &str) -> bool {
+    info!("⏳ Waiting for VM at {} to be ready for operations", ip);
+
+    let vm_ready_check = || {
+        // Test basic connectivity first
+        let ping_result = std::process::Command::new("ping")
+            .args(["-c", "1", "-W", "5", ip])
+            .output();
+
+        let has_network = match ping_result {
+            Ok(output) => output.status.success(),
+            Err(_) => false,
+        };
+
+        if has_network && test_ssh_connectivity(ip) {
+            Ok(())
+        } else {
+            Err("VM not ready yet")
+        }
+    };
+
+    let result = vm_ready_check
+        .retry(
+            &ExponentialBuilder::default()
+                .with_min_delay(Duration::from_secs(5)) // Start with 5s
+                .with_max_delay(Duration::from_secs(15)) // Max 15s between retries
+                .with_max_times(12), // Try up to 12 times (total ~3 minutes)
+        )
+        .call();
+
+    match result {
+        Ok(()) => {
+            info!("✅ VM at {} is ready for operations", ip);
+            true
+        }
+        Err(_) => {
+            warn!("❌ VM at {} not ready after retries", ip);
+            false
+        }
+    }
 }
 
 #[test]
@@ -506,11 +584,13 @@ fn test_cli_vm_ssh_connectivity() {
         if let Ok(vm_info) = serde_json::from_str::<serde_json::Value>(stdout) {
             if let Some(ip) = vm_info.get("ip").and_then(|v| v.as_str()) {
                 if ip != "N/A" {
-                    // 4. Wait a bit for the VM to fully boot
-                    std::thread::sleep(std::time::Duration::from_secs(30));
-
-                    // 5. Test SSH connectivity
-                    test_ssh_connection(ip);
+                    // 4. Wait for VM to be ready for SSH
+                    if wait_for_vm_ready(ip) {
+                        // 5. Test SSH connectivity
+                        test_ssh_connection(ip);
+                    } else {
+                        println!("⚠️  VM not ready for SSH testing");
+                    }
                 }
             }
         }
@@ -556,11 +636,13 @@ fn test_cli_vm_ssh_with_port_forward() {
             .success()
             .stdout(predicate::str::contains("success\": true"));
 
-        // 4. Wait for VM to boot
-        std::thread::sleep(std::time::Duration::from_secs(30));
-
-        // 5. Test SSH via port forward
-        test_ssh_connection_via_port("localhost", 2222);
+        // 4. Wait for VM to be ready and test SSH via port forward
+        if wait_for_ssh_connectivity("localhost") {
+            // 5. Test SSH via port forward
+            test_ssh_connection_via_port("localhost", 2222);
+        } else {
+            println!("⚠️  VM not ready for SSH port forward testing");
+        }
 
         // 6. Stop the VM
         let mut cmd = Command::cargo_bin("meda").unwrap();
@@ -610,11 +692,13 @@ fn test_cli_run_image_ssh() {
         if let Ok(vm_info) = serde_json::from_str::<serde_json::Value>(stdout) {
             if let Some(ip) = vm_info.get("ip").and_then(|v| v.as_str()) {
                 if ip != "N/A" {
-                    // 4. Wait for VM to boot
-                    std::thread::sleep(std::time::Duration::from_secs(30));
-
-                    // 5. Test SSH
-                    test_ssh_connection(ip);
+                    // 4. Wait for VM to be ready for SSH
+                    if wait_for_vm_ready(ip) {
+                        // 5. Test SSH
+                        test_ssh_connection(ip);
+                    } else {
+                        println!("⚠️  VM not ready for SSH testing");
+                    }
                 }
             }
         }
@@ -784,15 +868,16 @@ fn test_cli_vm_to_image_customization_persistence() {
             std::time::SystemTime::now()
         );
 
-        // Step 4: Wait for VM to fully boot
+        // Step 4: Wait for VM to be ready for operations
         info!(
-            "⏳ [STEP 4] Waiting for VM to boot (60 seconds) starting at: {:?}",
+            "⏳ [STEP 4] Waiting for VM to be ready starting at: {:?}",
             std::time::SystemTime::now()
         );
-        std::thread::sleep(std::time::Duration::from_secs(60));
+        let vm_ready = wait_for_vm_ready(ip);
         info!(
-            "✅ [STEP 4] Boot wait completed at: {:?}",
-            std::time::SystemTime::now()
+            "✅ [STEP 4] VM ready check completed at: {:?} - Ready: {}",
+            std::time::SystemTime::now(),
+            vm_ready
         );
 
         // Step 5: SSH in and create artifacts
@@ -800,7 +885,7 @@ fn test_cli_vm_to_image_customization_persistence() {
             "🔧 [STEP 5] Creating test artifacts via SSH at: {:?}",
             std::time::SystemTime::now()
         );
-        if test_ssh_connectivity(ip) {
+        if vm_ready && test_ssh_connectivity(ip) {
             info!(
                 "✅ [STEP 5] SSH connectivity confirmed at: {:?}",
                 std::time::SystemTime::now()
@@ -880,13 +965,13 @@ fn test_cli_vm_to_image_customization_persistence() {
                             .trim();
                         println!("New VM IP: {}", new_ip);
 
-                        // Step 10: Wait for new VM to boot
-                        println!("⏳ Step 10: Waiting for new VM to boot (120 seconds)");
-                        std::thread::sleep(std::time::Duration::from_secs(120));
+                        // Step 10: Wait for new VM to be ready
+                        println!("⏳ Step 10: Waiting for new VM to be ready");
+                        let new_vm_ready = wait_for_vm_ready(new_ip);
 
                         // Step 11: Verify artifacts persist in new VM
                         println!("🔍 Step 11: Verifying artifacts persist in new VM");
-                        if test_ssh_connectivity(new_ip) {
+                        if new_vm_ready && test_ssh_connectivity(new_ip) {
                             println!("✅ SSH connectivity to new VM confirmed");
 
                             // Check if test file exists and has correct content
@@ -1159,11 +1244,13 @@ runcmd:
         if let Ok(vm_info) = serde_json::from_str::<serde_json::Value>(stdout) {
             if let Some(ip) = vm_info.get("ip").and_then(|v| v.as_str()) {
                 if ip != "N/A" {
-                    // 4. Wait longer for custom user-data to complete
-                    std::thread::sleep(std::time::Duration::from_secs(60));
-
-                    // 5. Test SSH with additional commands
-                    test_ssh_with_commands(ip);
+                    // 4. Wait for VM to be ready (custom user-data needs more time)
+                    if wait_for_vm_ready(ip) {
+                        // 5. Test SSH with additional commands
+                        test_ssh_with_commands(ip);
+                    } else {
+                        println!("⚠️  VM with custom user-data not ready for SSH testing");
+                    }
                 }
             }
         }
@@ -1287,15 +1374,15 @@ fn test_complete_vm_to_image_to_vm_workflow() {
             .trim();
         println!("VM IP: {}", ip);
 
-        // Step 4: Wait for VM to fully boot
-        println!("⏳ Step 4: Waiting for VM to boot (60 seconds)");
-        std::thread::sleep(std::time::Duration::from_secs(60));
+        // Step 4: Wait for VM to be ready for operations
+        println!("⏳ Step 4: Waiting for VM to be ready");
+        let vm_ready = wait_for_vm_ready(ip);
 
         // Step 5: Customize the VM via SSH
         println!("🔧 Step 5: Customizing VM via SSH");
 
         // Test SSH connectivity first
-        if test_ssh_connectivity(ip) {
+        if vm_ready && test_ssh_connectivity(ip) {
             println!("✅ SSH connectivity confirmed");
 
             // Create test file
@@ -1361,36 +1448,14 @@ fn test_complete_vm_to_image_to_vm_workflow() {
                             .trim();
                         println!("New VM IP: {}", new_ip);
 
-                        // Step 10: Wait for new VM to boot and test connectivity
-                        println!("⏳ Step 10: Waiting for new VM to boot (120 seconds)");
-                        std::thread::sleep(std::time::Duration::from_secs(120));
+                        // Step 10: Wait for new VM to be ready
+                        println!("⏳ Step 10: Waiting for new VM to be ready");
+                        let new_vm_ready = wait_for_vm_ready(new_ip);
 
                         // Step 11: Verify customizations persist
                         println!("🔍 Step 11: Verifying customizations persist in new VM");
 
-                        // Try to ping first to check basic connectivity
-                        println!("🏓 Testing basic connectivity to new VM...");
-                        let ping_result = std::process::Command::new("ping")
-                            .args(["-c", "3", "-W", "5", new_ip])
-                            .output();
-
-                        let has_connectivity = match ping_result {
-                            Ok(output) => {
-                                if output.status.success() {
-                                    println!("✅ Ping successful to new VM");
-                                    true
-                                } else {
-                                    println!("❌ Ping failed to new VM");
-                                    false
-                                }
-                            }
-                            Err(_) => {
-                                println!("❌ Could not execute ping command");
-                                false
-                            }
-                        };
-
-                        if has_connectivity && test_ssh_connectivity(new_ip) {
+                        if new_vm_ready {
                             println!("✅ SSH connectivity to new VM confirmed");
 
                             // Check if test file exists

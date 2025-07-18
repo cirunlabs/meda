@@ -99,5 +99,5 @@ jobs:
         run: cargo test --bins
 
       - name: Run integration tests
-        run: cargo test --test integration_tests
+        run: RUST_LOG=debug cargo test --test integration_tests -- --nocapture
 
