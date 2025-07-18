@@ -98,6 +98,14 @@ jobs:
       - name: Run unit tests
         run: cargo test --bins
 
+      - name: Check available disk space
+        run: df -h
+
       - name: Run integration tests
-        run: RUST_LOG=debug cargo test --test integration_tests -- --nocapture
+        run: RUST_LOG="meda=debug,integration_tests=debug" cargo test --test integration_tests -- --nocapture
+        timeout-minutes: 30
+
+      - name: Check disk space after tests
+        run: df -h
+        if: always()
 

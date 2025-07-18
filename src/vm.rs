@@ -5,7 +5,7 @@ use crate::util::{
     check_process_running, download_file, ensure_dependency, run_command, write_string_to_file,
 };
 use backon::{BlockingRetryable, ExponentialBuilder};
-use log::info;
+use log::{debug, info, warn};
 use serde::Serialize;
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
@@ -593,16 +593,39 @@ pub async fn start(config: &Config, name: &str, json: bool) -> Result<()> {
     }
 
     // Run the start script
+    info!("🚀 Starting VM {} with cloud-hypervisor", name);
     run_command("bash", &[start_script.to_str().unwrap()])?;
+
+    // Give a moment for initial log entries
+    thread::sleep(Duration::from_millis(500));
 
     // Use retry with exponential backoff to check if VM is running
     let vm_name = name.to_string();
     let config_clone = config.clone();
+    let vm_dir_clone = config.vm_dir(name);
 
     let check_vm_running_retry = || {
         if check_vm_running(&config_clone, &vm_name)? {
             Ok(())
         } else {
+            // Show current ch.log contents for debugging
+            let log_file = vm_dir_clone.join("ch.log");
+            if log_file.exists() {
+                if let Ok(log_contents) = fs::read_to_string(&log_file) {
+                    let lines: Vec<&str> = log_contents.lines().collect();
+                    // Show last 3 lines of ch.log for context
+                    let last_lines: Vec<&str> = lines.iter().rev().take(3).rev().cloned().collect();
+                    if !last_lines.is_empty() {
+                        debug!(
+                            "📄 ch.log (last {} lines): {}",
+                            last_lines.len(),
+                            last_lines.join(" | ")
+                        );
+                    }
+                }
+            }
+
+            warn!("🔄 VM {} not yet running, retrying...", vm_name);
             Err(Error::Other(format!("VM {} not yet running", vm_name)))
         }
     };
@@ -621,13 +644,39 @@ pub async fn start(config: &Config, name: &str, json: bool) -> Result<()> {
         let vm_dir = config.vm_dir(name);
         let log_file = vm_dir.join("ch.log");
         let log_contents = if log_file.exists() {
-            fs::read_to_string(&log_file).unwrap_or_else(|_| "Could not read log file".to_string())
+            match fs::read_to_string(&log_file) {
+                Ok(contents) => {
+                    let lines: Vec<&str> = contents.lines().collect();
+                    if lines.len() > 10 {
+                        // Show first 5 and last 5 lines for context
+                        let first_lines =
+                            lines.iter().take(5).cloned().collect::<Vec<_>>().join("\n");
+                        let last_lines = lines
+                            .iter()
+                            .rev()
+                            .take(5)
+                            .rev()
+                            .cloned()
+                            .collect::<Vec<_>>()
+                            .join("\n");
+                        format!(
+                            "First 5 lines:\n{}\n\n... ({} total lines) ...\n\nLast 5 lines:\n{}",
+                            first_lines,
+                            lines.len(),
+                            last_lines
+                        )
+                    } else {
+                        contents
+                    }
+                }
+                Err(_) => "Could not read log file".to_string(),
+            }
         } else {
             "Log file not found".to_string()
         };
 
         return Err(Error::Other(format!(
-            "Failed to start VM: {} after retries. Log contents: {}",
+            "Failed to start VM: {} after retries.\n\nCloud-Hypervisor Log:\n{}",
             name, log_contents
         )));
     }

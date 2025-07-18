@@ -29,6 +29,30 @@ fn cleanup_test_env() {
     env::remove_var("MEDA_DISK_SIZE");
 }
 
+// Enhanced cleanup function for disk space management
+fn cleanup_test_artifacts() {
+    // Clean up any leftover VM directories and images
+    if let Ok(vm_dir) = env::var("MEDA_VM_DIR") {
+        let _ = std::fs::remove_dir_all(&vm_dir);
+    }
+    if let Ok(asset_dir) = env::var("MEDA_ASSET_DIR") {
+        let asset_path = std::path::PathBuf::from(asset_dir);
+        // Remove images directory to free space
+        let images_dir = asset_path.join("images");
+        if images_dir.exists() {
+            let _ = std::fs::remove_dir_all(&images_dir);
+        }
+        // Keep essential binaries but remove large VM artifacts
+        let vms_dir = asset_path.join("vms");
+        if vms_dir.exists() {
+            let _ = std::fs::remove_dir_all(&vms_dir);
+        }
+    }
+
+    // Force cleanup environment variables
+    cleanup_test_env();
+}
+
 // Helper function to wait for SSH connectivity with retry
 fn wait_for_ssh_connectivity(ip: &str) -> bool {
     info!("🔌 Waiting for SSH connectivity to {}", ip);
@@ -1046,7 +1070,7 @@ fn test_cli_vm_to_image_customization_persistence() {
         "✅ [TEST END] VM to image persistence test completed at: {:?}",
         std::time::SystemTime::now()
     );
-    cleanup_test_env();
+    cleanup_test_artifacts();
 }
 
 // Test that VM resources (CPU, memory, disk) are preserved through image creation
@@ -1057,18 +1081,18 @@ fn test_cli_vm_to_image_resource_preservation() {
 
     println!("🚀 Testing VM resource preservation through image creation");
 
-    // Step 1: Create source VM with custom resources
+    // Step 1: Create source VM with custom resources (smaller for CI)
     println!("📦 Step 1: Creating source VM with custom resources");
     let mut cmd = Command::cargo_bin("meda").unwrap();
     cmd.args([
         "create",
         "test-resource-source",
         "--memory",
-        "2G",
+        "1G",
         "--cpus",
-        "4",
+        "2",
         "--disk",
-        "20G",
+        "8G",
         "--json",
     ]);
     cmd.assert()
@@ -1083,13 +1107,13 @@ fn test_cli_vm_to_image_resource_preservation() {
 
     let stdout = std::str::from_utf8(&output.get_output().stdout).unwrap();
     if let Ok(vm_info) = serde_json::from_str::<serde_json::Value>(stdout) {
-        assert_eq!(vm_info.get("memory").and_then(|v| v.as_str()), Some("2G"));
-        assert_eq!(vm_info.get("disk").and_then(|v| v.as_str()), Some("20G"));
+        assert_eq!(vm_info.get("memory").and_then(|v| v.as_str()), Some("1G"));
+        assert_eq!(vm_info.get("disk").and_then(|v| v.as_str()), Some("8G"));
         if let Some(details) = vm_info.get("details") {
-            assert_eq!(details.get("memory").and_then(|v| v.as_str()), Some("2G"));
+            assert_eq!(details.get("memory").and_then(|v| v.as_str()), Some("1G"));
             assert_eq!(
                 details.get("disk_size").and_then(|v| v.as_str()),
-                Some("20G")
+                Some("8G")
             );
         }
     }
@@ -1123,7 +1147,7 @@ fn test_cli_vm_to_image_resource_preservation() {
         .success()
         .stdout(predicate::str::contains("success\": true"));
 
-    // Step 5: Create new VM from image with custom resources
+    // Step 5: Create new VM from image with custom resources (smaller for CI)
     println!("🆕 Step 5: Creating new VM from image (custom resources)");
     let mut cmd = Command::cargo_bin("meda").unwrap();
     cmd.args([
@@ -1132,9 +1156,9 @@ fn test_cli_vm_to_image_resource_preservation() {
         "--name",
         "test-resource-custom",
         "--memory",
-        "4G",
+        "2G",
         "--cpus",
-        "8",
+        "4",
         "--no-start",
         "--json",
     ]);
@@ -1151,9 +1175,9 @@ fn test_cli_vm_to_image_resource_preservation() {
     let output = cmd.assert().success();
     let stdout = std::str::from_utf8(&output.get_output().stdout).unwrap();
     if let Ok(vm_info) = serde_json::from_str::<serde_json::Value>(stdout) {
-        // Should have environment defaults (512M, 1 CPU) but disk from image (20G)
+        // Should have environment defaults (512M, 1 CPU) but disk from image (8G)
         assert_eq!(vm_info.get("memory").and_then(|v| v.as_str()), Some("512M"));
-        assert_eq!(vm_info.get("disk").and_then(|v| v.as_str()), Some("20G")); // Preserved from source
+        assert_eq!(vm_info.get("disk").and_then(|v| v.as_str()), Some("8G")); // Preserved from source
     }
 
     // Check custom VM
@@ -1163,8 +1187,8 @@ fn test_cli_vm_to_image_resource_preservation() {
     let stdout = std::str::from_utf8(&output.get_output().stdout).unwrap();
     if let Ok(vm_info) = serde_json::from_str::<serde_json::Value>(stdout) {
         // Should have custom resources
-        assert_eq!(vm_info.get("memory").and_then(|v| v.as_str()), Some("4G"));
-        assert_eq!(vm_info.get("disk").and_then(|v| v.as_str()), Some("20G")); // Preserved from source
+        assert_eq!(vm_info.get("memory").and_then(|v| v.as_str()), Some("2G"));
+        assert_eq!(vm_info.get("disk").and_then(|v| v.as_str()), Some("8G")); // Preserved from source
     }
 
     // Step 7: Clean up
@@ -1184,7 +1208,7 @@ fn test_cli_vm_to_image_resource_preservation() {
     cmd.assert().success();
 
     println!("✅ Resource preservation test completed successfully");
-    cleanup_test_env();
+    cleanup_test_artifacts();
 }
 
 // Test SSH with custom user-data
@@ -1533,7 +1557,7 @@ fn test_complete_vm_to_image_to_vm_workflow() {
     cmd.assert().success();
 
     println!("🏁 Integration test completed");
-    cleanup_test_env();
+    cleanup_test_artifacts();
 }
 
 // Helper function to test basic SSH connectivity
