@@ -20,7 +20,7 @@ var (
 func main() {
 	pps := plugin.NewSet()
 	pps.RegisterBuilder("vm", new(Builder))
-	pps.SetVersion(version.InitializePluginVersion(Version, VersionPrerelease))
+	pps.SetVersion(version.NewPluginVersion(Version, VersionPrerelease, ""))
 	err := pps.Run()
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err.Error())
