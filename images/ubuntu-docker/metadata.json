@@ -1,11 +1,11 @@
 {
   "image_name": "ubuntu-docker",
-  "image_tag": "latest", 
+  "image_tag": "latest",
   "description": "Ubuntu 22.04 LTS with Docker, Docker Compose, kubectl, and Helm pre-installed",
   "base_image": "ubuntu:latest",
   "tools": [
     "docker",
-    "docker-compose", 
+    "docker-compose",
     "kubectl",
     "helm",
     "curl",

@@ -22,7 +22,7 @@ variable "registry" {
 
 variable "organization" {
   type        = string
-  default     = env("GITHUB_REPOSITORY_OWNER")
+  default     = env("GITHUB_REPOSITORY_OWNER") != "" ? env("GITHUB_REPOSITORY_OWNER") : "cirunlabs"
   description = "Registry organization/namespace"
 }
 
@@ -38,17 +38,17 @@ source "meda-vm" "ubuntu-docker" {
   memory            = "2G"
   cpus              = 4
   disk_size         = "20G"
-  
+
   output_image_name = "ubuntu-docker"
   output_tag        = var.image_tag
   registry          = var.registry
   organization      = var.organization
-  
+
   # Use Meda API if available
   use_api    = true
   meda_host  = "127.0.0.1"
   meda_port  = 7777
-  
+
   # SSH configuration
   ssh_username = "ubuntu"
   ssh_timeout  = "10m"
@@ -59,7 +59,7 @@ source "meda-vm" "ubuntu-docker" {
 build {
   name = "ubuntu-docker"
   sources = ["source.meda-vm.ubuntu-docker"]
-  
+
   # Wait for cloud-init to complete
   provisioner "shell" {
     pause_before = "30s"
@@ -69,7 +69,7 @@ build {
       "echo 'Cloud-init completed'"
     ]
   }
-  
+
   # System updates
   provisioner "shell" {
     inline = [
@@ -80,7 +80,7 @@ build {
       "sudo apt-get autoclean"
     ]
   }
-  
+
   # Install Docker
   provisioner "shell" {
     inline = [
@@ -95,7 +95,7 @@ build {
       "sudo apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin"
     ]
   }
-  
+
   # Configure Docker
   provisioner "shell" {
     inline = [
@@ -107,7 +107,7 @@ build {
       "echo '{\"log-driver\": \"json-file\", \"log-opts\": {\"max-size\": \"10m\", \"max-file\": \"3\"}}' | sudo tee /etc/docker/daemon.json"
     ]
   }
-  
+
   # Install additional tools
   provisioner "shell" {
     inline = [
@@ -117,7 +117,7 @@ build {
       "curl https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash"  # helm
     ]
   }
-  
+
   # Configure user environment
   provisioner "shell" {
     inline = [
@@ -128,7 +128,7 @@ build {
       "echo 'alias l=\"ls -CF\"' >> ~/.bashrc"
     ]
   }
-  
+
   # Cleanup and preparation for image creation
   provisioner "shell" {
     inline = [
@@ -143,7 +143,7 @@ build {
       "echo 'Image preparation completed'"
     ]
   }
-  
+
   # Final validation
   provisioner "shell" {
     inline = [
@@ -155,7 +155,7 @@ build {
       "echo 'All tools installed successfully'"
     ]
   }
-  
+
   post-processor "manifest" {
     output = "manifest.json"
     strip_path = true

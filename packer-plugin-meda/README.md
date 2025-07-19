@@ -48,14 +48,14 @@ source "meda-vm" "ubuntu" {
   disk_size         = "20G"
   output_image_name = "my-custom-image"
   output_tag        = "v1.0"
-  
+
   ssh_username = "ubuntu"
   ssh_timeout  = "5m"
 }
 
 build {
   sources = ["source.meda-vm.ubuntu"]
-  
+
   provisioner "shell" {
     inline = [
       "sudo apt-get update",
@@ -73,7 +73,7 @@ source "meda-vm" "ubuntu" {
   use_api     = true
   meda_host   = "localhost"
   meda_port   = 7777
-  
+
   vm_name           = "api-vm"
   base_image        = "ubuntu:latest"
   output_image_name = "api-built-image"
@@ -94,7 +94,7 @@ source "meda-vm" "ubuntu" {
   output_tag        = "latest"
   registry          = "ghcr.io"
   organization      = "myorg"
-  
+
   ssh_username     = "ubuntu"
   ssh_timeout     = "10m"
   ssh_port        = 22

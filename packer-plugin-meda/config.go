@@ -25,7 +25,7 @@ type Config struct {
 	MedaPort     int    `mapstructure:"meda_port"`
 	UseAPI       bool   `mapstructure:"use_api"`
 
-	// VM configuration  
+	// VM configuration
 	VMName       string `mapstructure:"vm_name" required:"true"`
 	BaseImage    string `mapstructure:"base_image" required:"true"`
 	Memory       string `mapstructure:"memory"`
@@ -38,6 +38,10 @@ type Config struct {
 	OutputTag       string `mapstructure:"output_tag"`
 	Registry        string `mapstructure:"registry"`
 	Organization    string `mapstructure:"organization"`
+
+	// Push configuration
+	PushToRegistry  bool   `mapstructure:"push_to_registry"`
+	DryRun          bool   `mapstructure:"dry_run"`
 
 	ctx interpolate.Context
 }
@@ -122,6 +126,15 @@ func (c *Config) Prepare(raws ...interface{}) error {
 	if c.Comm.SSHTimeout == 0 {
 		c.Comm.SSHTimeout = 5 * time.Minute
 	}
+	if c.Comm.SSHPassword == "" {
+		// Set a default password for Ubuntu cloud images
+		c.Comm.SSHPassword = "ubuntu"
+	}
+
+	// Disable host key checking for development
+	c.Comm.SSHHandshakeAttempts = 10
+
+	// SSH host will be set dynamically in the step
 
 	if len(errs) > 0 {
 		return fmt.Errorf("validation errors: %v", errs)

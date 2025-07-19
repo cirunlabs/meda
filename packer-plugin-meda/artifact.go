@@ -7,8 +7,9 @@ import (
 
 // Artifact represents the result of a Meda build
 type Artifact struct {
-	ImageName string
-	Config    *Config
+	ImageName   string
+	PushedImage string
+	Config      *Config
 }
 
 // BuilderId returns the ID of the builder that created this artifact
@@ -29,6 +30,9 @@ func (a *Artifact) Id() string {
 
 // String returns a human-readable representation of this artifact
 func (a *Artifact) String() string {
+	if a.PushedImage != "" {
+		return fmt.Sprintf("Meda image: %s (pushed to %s)", a.ImageName, a.PushedImage)
+	}
 	return fmt.Sprintf("Meda image: %s", a.ImageName)
 }
 
@@ -37,6 +41,8 @@ func (a *Artifact) State(name string) interface{} {
 	switch name {
 	case "image_name":
 		return a.ImageName
+	case "pushed_image":
+		return a.PushedImage
 	case "registry":
 		return a.Config.Registry
 	case "organization":
@@ -52,7 +58,7 @@ func (a *Artifact) Destroy() error {
 	if a.Config.UseAPI {
 		// API call to delete image
 		cmd = []string{"curl", "-X", "DELETE",
-			fmt.Sprintf("http://%s:%d/api/v1/images/%s", 
+			fmt.Sprintf("http://%s:%d/api/v1/images/%s",
 				a.Config.MedaHost, a.Config.MedaPort, a.ImageName)}
 	} else {
 		// CLI call to delete image

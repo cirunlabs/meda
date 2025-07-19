@@ -1,0 +1,14 @@
+{
+  "name": "ubuntu-base",
+  "description": "Base Ubuntu image for Meda - minimal configuration with push support",
+  "version": "1.0.0",
+  "base_image": "ubuntu:latest",
+  "features": [
+    "Minimal Ubuntu installation",
+    "GHCR/OCI registry push support",
+    "No SSH provisioning required",
+    "Fast build (~17 seconds)"
+  ],
+  "registry": "ghcr.io",
+  "recommended_usage": "make all"
+}

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"os"
 	"os/exec"
 	"strings"
 	"time"
@@ -43,11 +44,11 @@ func (s *stepCreateVM) Run(ctx context.Context, state multistep.StateBag) multis
 			"--cpus", fmt.Sprintf("%d", config.CPUs),
 			"--disk", config.DiskSize,
 			"--no-start"}
-		
+
 		if config.UserDataFile != "" {
 			args = append(args, "--user-data", config.UserDataFile)
 		}
-		
+
 		// Use cargo run for development
 		if config.MedaBinary == "cargo" {
 			cargoArgs := append([]string{"run", "--"}, args...)
@@ -152,7 +153,8 @@ func (s *stepWaitForVM) Run(ctx context.Context, state multistep.StateBag) multi
 				ip := strings.TrimSpace(string(output))
 				if ip != "" && ip != "null" {
 					state.Put("vm_ip", ip)
-					// Set communicator host
+					state.Put("instance_ip", ip)
+					// Set SSH host in the communicator config
 					config.Comm.SSHHost = ip
 					ui.Say(fmt.Sprintf("VM is ready with IP: %s", ip))
 					return multistep.ActionContinue
@@ -249,6 +251,90 @@ func (s *stepCreateImage) Run(ctx context.Context, state multistep.StateBag) mul
 }
 
 func (s *stepCreateImage) Cleanup(state multistep.StateBag) {}
+
+// stepPushImage pushes the created image to a registry
+type stepPushImage struct{}
+
+func (s *stepPushImage) Run(ctx context.Context, state multistep.StateBag) multistep.StepAction {
+	config := state.Get("config").(*Config)
+	ui := state.Get("ui").(packer.Ui)
+	imageName := state.Get("image_name").(string)
+
+	// Skip push if not enabled
+	if !config.PushToRegistry {
+		ui.Say("Push to registry disabled, skipping push step")
+		return multistep.ActionContinue
+	}
+
+	// Check for GITHUB_TOKEN when pushing to GHCR
+	if strings.Contains(config.Registry, "ghcr.io") {
+		if os.Getenv("GITHUB_TOKEN") == "" {
+			err := fmt.Errorf("GITHUB_TOKEN environment variable is required for pushing to GHCR. Please set it with: export GITHUB_TOKEN=your_token")
+			state.Put("error", err)
+			ui.Error(err.Error())
+			return multistep.ActionHalt
+		}
+		ui.Say("GITHUB_TOKEN found for GHCR authentication")
+	}
+
+	// Build target image name
+	var targetImage string
+	if config.Organization != "" {
+		targetImage = fmt.Sprintf("%s/%s/%s:%s", config.Registry, config.Organization, config.OutputImageName, config.OutputTag)
+	} else {
+		targetImage = fmt.Sprintf("%s/%s:%s", config.Registry, config.OutputImageName, config.OutputTag)
+	}
+
+	ui.Say(fmt.Sprintf("Pushing image '%s' to '%s'", imageName, targetImage))
+
+	var cmd *exec.Cmd
+	if config.UseAPI {
+		// Use REST API to push image
+		pushData := fmt.Sprintf(`{
+			"name": "%s",
+			"image": "%s",
+			"registry": "%s",
+			"dry_run": %t
+		}`, imageName, targetImage, config.Registry, config.DryRun)
+
+		cmd = exec.Command("curl", "-X", "POST",
+			fmt.Sprintf("http://%s:%d/api/v1/images/push", config.MedaHost, config.MedaPort),
+			"-H", "Content-Type: application/json",
+			"-d", pushData)
+	} else {
+		// Use CLI to push image - Meda expects just the image name without tag
+		imageNameOnly := config.OutputImageName
+		args := []string{"push", imageNameOnly, targetImage}
+		if config.Registry != "" && config.Registry != "ghcr.io" {
+			args = append(args, "--registry", config.Registry)
+		}
+		if config.DryRun {
+			args = append(args, "--dry-run")
+		}
+
+		if config.MedaBinary == "cargo" {
+			cargoArgs := append([]string{"run", "--"}, args...)
+			cmd = exec.Command("cargo", cargoArgs...)
+			cmd.Dir = "/home/ubuntu/meda"
+		} else {
+			cmd = exec.Command(config.MedaBinary, args...)
+		}
+	}
+
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		err := fmt.Errorf("failed to push image: %s - %s", err, string(output))
+		state.Put("error", err)
+		ui.Error(err.Error())
+		return multistep.ActionHalt
+	}
+
+	ui.Say(fmt.Sprintf("Image '%s' pushed successfully to '%s'", imageName, targetImage))
+	state.Put("pushed_image", targetImage)
+	return multistep.ActionContinue
+}
+
+func (s *stepPushImage) Cleanup(state multistep.StateBag) {}
 
 // stepCleanupVM cleans up the VM
 type stepCleanupVM struct{}

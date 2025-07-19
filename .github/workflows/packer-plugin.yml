@@ -85,20 +85,20 @@ jobs:
         run: |
           cd packer-plugin-meda
           go mod tidy
-          
+
           # Set version from git tag or commit
           if [[ "${{ github.ref }}" == refs/tags/* ]]; then
             VERSION=${GITHUB_REF#refs/tags/}
           else
             VERSION="dev-${GITHUB_SHA::8}"
           fi
-          
+
           # Build binary
           BINARY_NAME="packer-plugin-meda"
           if [ "${{ matrix.goos }}" == "windows" ]; then
             BINARY_NAME="${BINARY_NAME}.exe"
           fi
-          
+
           GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} go build \
             -ldflags="-s -w -X main.Version=${VERSION}" \
             -o "dist/${BINARY_NAME}_${{ matrix.goos }}_${{ matrix.goarch }}" \
@@ -157,7 +157,7 @@ jobs:
           # Validate templates
           cd images/ubuntu-minimal
           packer validate template.pkr.hcl
-          
+
           cd ../ubuntu-docker
           packer validate template.pkr.hcl
 
@@ -193,17 +193,17 @@ jobs:
       - name: Create release
         run: |
           cd packer-plugin-meda
-          
+
           # Set up environment for release
           export GITHUB_TOKEN="${{ secrets.GITHUB_TOKEN }}"
-          
+
           # Run GoReleaser
           goreleaser release --clean
 
       - name: Generate plugin manifest
         run: |
           cd packer-plugin-meda
-          
+
           # Create plugin manifest for Packer Registry
           cat > plugin-manifest.json << EOF
           {
@@ -240,7 +240,7 @@ jobs:
       - name: Update documentation
         run: |
           cd packer-plugin-meda
-          
+
           # Update version in README if this is a release
           if [[ "${{ github.event_name }}" == "release" ]]; then
             VERSION="${{ github.event.release.tag_name }}"

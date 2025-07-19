@@ -59,13 +59,13 @@ source "meda-vm" "ubuntu" {
   memory            = "2G"
   cpus              = 4
   output_image_name = "my-custom-image"
-  
+
   ssh_username = "ubuntu"
 }
 
 build {
   sources = ["source.meda-vm.ubuntu"]
-  
+
   provisioner "shell" {
     inline = [
       "sudo apt-get update",
@@ -243,20 +243,20 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      
+
       - name: Setup Meda and Packer
         run: |
           # Install dependencies
           cargo build --release
           sudo cp target/release/meda /usr/local/bin/
-          
+
           # Install Packer
           curl -fsSL https://releases.hashicorp.com/packer/1.10.0/packer_1.10.0_linux_amd64.zip -o packer.zip
           unzip packer.zip && sudo mv packer /usr/local/bin/
-          
+
           # Install plugin
           packer plugins install github.com/cirunlabs/meda
-      
+
       - name: Build images
         run: |
           cd my-images/

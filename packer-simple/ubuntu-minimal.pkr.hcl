@@ -28,7 +28,7 @@ source "null" "meda" {
 build {
   name = "meda-ubuntu-minimal"
   sources = ["source.null.meda"]
-  
+
   # Create VM using Meda
   provisioner "shell-local" {
     inline = [
@@ -36,7 +36,7 @@ build {
       "meda run ${var.base_image} --name ${var.vm_name} --memory 1G --cpus 2 --disk 10G"
     ]
   }
-  
+
   # Wait for VM to be ready and get IP
   provisioner "shell-local" {
     inline = [
@@ -46,7 +46,7 @@ build {
       "echo \"VM is ready with IP: $VM_IP\""
     ]
   }
-  
+
   # Provision the VM via SSH
   provisioner "shell-local" {
     inline = [
@@ -57,7 +57,7 @@ build {
       "ssh -o StrictHostKeyChecking=no ubuntu@$VM_IP 'chmod +x /tmp/provision.sh && /tmp/provision.sh'"
     ]
   }
-  
+
   # Stop VM and create image
   provisioner "shell-local" {
     inline = [
@@ -67,7 +67,7 @@ build {
       "echo 'Image ${var.output_image_name}:latest created successfully'"
     ]
   }
-  
+
   # Cleanup VM
   provisioner "shell-local" {
     inline = [
@@ -76,7 +76,7 @@ build {
       "echo 'VM ${var.vm_name} deleted'"
     ]
   }
-  
+
   # Show final image
   provisioner "shell-local" {
     inline = [

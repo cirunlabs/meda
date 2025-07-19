@@ -52,14 +52,14 @@ trap cleanup EXIT
 # Check dependencies
 check_dependencies() {
   local missing=false
-  
+
   for cmd in nc ssh sshpass; do
     if ! command -v "$cmd" &>/dev/null; then
       warn "Required command '$cmd' not found"
       missing=true
     fi
   done
-  
+
   if $missing; then
     log "Installing missing dependencies..."
     sudo apt-get update -qq
@@ -84,15 +84,15 @@ fi
 # Get the VM's IP address
 get_vm_ip() {
   local ip
-  
+
   # Try multiple methods to get the IP
   ip=$("$SCRIPT_DIR/ch-vm.sh" get "$VM_NAME" | grep -oP '(?<=VM IP: )[0-9.]+' || echo "")
-  
+
   if [[ -z "$ip" ]]; then
     # Try to extract from list command
     ip=$("$SCRIPT_DIR/ch-vm.sh" list | grep "$VM_NAME" | awk '{print $3}')
   fi
-  
+
   if [[ -z "$ip" || "$ip" == "-" ]]; then
     # Try to get from VM directory
     local vm_dir="${HOME}/.ch-vms/vms/$VM_NAME"
@@ -101,7 +101,7 @@ get_vm_ip() {
       ip="${subnet}.2"
     fi
   fi
-  
+
   echo "$ip"
 }
 
@@ -124,11 +124,11 @@ while [[ $(($(date +%s) - start_time)) -lt $SSH_TIMEOUT ]]; do
     "$SCRIPT_DIR/ch-vm.sh" debug "$VM_NAME"
     error "VM stopped unexpectedly"
   fi
-  
+
   # Check if we can ping the VM
   if ping -c1 -W1 "$VM_IP" &>/dev/null; then
     info "VM is responding to ping"
-    
+
     # Check if SSH port is open
     if nc -z -w2 "$VM_IP" 22 &>/dev/null; then
       info "SSH port is open"
@@ -140,14 +140,14 @@ while [[ $(($(date +%s) - start_time)) -lt $SSH_TIMEOUT ]]; do
       info "Ping successful but SSH port not open yet"
     fi
   fi
-  
+
   # Try to fix network if ping fails after some time
   elapsed=$(($(date +%s) - start_time))
   if [[ $elapsed -gt 60 && $((elapsed % 30)) -eq 0 ]]; then
     warn "VM not responding to ping after ${elapsed}s, attempting network fix"
     "$SCRIPT_DIR/ch-vm.sh" debug "$VM_NAME" >/dev/null
   fi
-  
+
   # Show progress and wait
   echo -n "."
   sleep $SSH_RETRY_DELAY
@@ -173,26 +173,26 @@ for attempt in {1..5}; do
     ssh_success=true
     break
   fi
-  
+
   # If this isn't the first attempt, try to debug what's happening
   if [[ $attempt -gt 1 ]]; then
     info "Checking SSH server status on VM..."
     # Try with verbose output to see what's happening
     $SSH_CMD -v "echo test" 2>&1 | grep -i "connection\|authentication\|debug\|error" || true
   fi
-  
+
   sleep $SSH_RETRY_DELAY
 done
 
 if ! $ssh_success; then
   warn "SSH connection failed. Trying with password authentication..."
-  
+
   # Check if sshpass is installed
   if ! command -v sshpass &>/dev/null; then
     warn "sshpass not installed. Installing..."
     sudo apt-get update -qq && sudo apt-get install -y -qq sshpass
   fi
-  
+
   # Try with password authentication (multiple attempts)
   for attempt in {1..5}; do
     info "Password SSH attempt $attempt/5..."
@@ -202,11 +202,11 @@ if ! $ssh_success; then
     fi
     sleep $SSH_RETRY_DELAY
   done
-  
+
   if ! $ssh_success; then
     warn "SSH connection with password also failed"
     warn "Checking if cloud-init has completed on the VM..."
-    
+
     # Try to check cloud-init status
     if ping -c1 -W1 "$VM_IP" &>/dev/null; then
       # Try with a longer timeout
@@ -216,7 +216,7 @@ if ! $ssh_success; then
         warn "Could not retrieve cloud-init status"
       fi
     fi
-    
+
     "$SCRIPT_DIR/ch-vm.sh" debug "$VM_NAME"
     error "SSH test failed"
   fi

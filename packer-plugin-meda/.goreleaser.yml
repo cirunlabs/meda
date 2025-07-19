@@ -68,17 +68,17 @@ release:
   name_template: "v{{ .Version }}"
   header: |
     ## Packer Plugin for Meda v{{ .Version }}
-    
+
     This release includes the Packer plugin for building VM images with Meda.
-    
+
     ### Installation
-    
+
     ```bash
     packer plugins install github.com/cirunlabs/meda v{{ .Version }}
     ```
-    
+
     ### Usage
-    
+
     See the [documentation](https://github.com/cirunlabs/packer-plugin-meda/blob/main/README.md) for usage examples.
 
 snapshot:

@@ -55,6 +55,7 @@ func (b *Builder) Run(ctx context.Context, ui packer.Ui, hook packer.Hook) (pack
 		&commonsteps.StepProvision{},
 		&stepStopVM{},
 		&stepCreateImage{},
+		&stepPushImage{},
 		&stepCleanupVM{},
 	}
 
@@ -82,9 +83,17 @@ func (b *Builder) Run(ctx context.Context, ui packer.Ui, hook packer.Hook) (pack
 		return nil, fmt.Errorf("failed to get image name from state")
 	}
 
+	// Get the pushed image name if it exists
+	pushedImage, _ := state.GetOk("pushed_image")
+	var pushedImageStr string
+	if pushedImage != nil {
+		pushedImageStr = pushedImage.(string)
+	}
+
 	artifact := &Artifact{
-		ImageName: imageName.(string),
-		Config:    &b.config,
+		ImageName:   imageName.(string),
+		PushedImage: pushedImageStr,
+		Config:      &b.config,
 	}
 
 	return artifact, nil
