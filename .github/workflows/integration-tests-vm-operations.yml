@@ -92,12 +92,6 @@ jobs:
             echo "=== end $logfile ==="
           done
 
-      - name: Setup tmate session for debugging
-        if: failure()
-        uses: mxschmitt/action-tmate@v3
-        with:
-          limit-access-to-actor: true
-          timeout-minutes: 30
 
       - name: Check disk space after tests
         run: df -h
