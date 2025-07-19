@@ -2,6 +2,7 @@ use crate::error::{Error, Result};
 use std::env;
 use std::path::PathBuf;
 
+#[derive(Clone)]
 pub struct Config {
     pub ch_home: PathBuf,
     pub asset_dir: PathBuf,

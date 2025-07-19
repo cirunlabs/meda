@@ -26,6 +26,7 @@ sha2 = "0.10"
 base64 = "0.21"
 tar = "0.4"
 flate2 = "1.0"
+backon = "1.2"
 # REST API dependencies
 axum = { version = "0.7", features = ["macros"] }
 tower = "0.4"

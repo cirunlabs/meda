@@ -1,0 +1,96 @@
+name: Integration Tests - Basic
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+    branches: ["main"]
+  workflow_call:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  integration-basic:
+    name: Basic Integration Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-integration-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-integration-
+            ${{ runner.os }}-cargo-
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y qemu-utils genisoimage iptables jq sshpass
+
+      - name: Give the runner user rw access to /dev/kvm
+        run: sudo setfacl -m u:${USER}:rw /dev/kvm
+
+      - name: Check available disk space
+        run: df -h
+
+      - name: Run basic integration tests
+        run: |
+          RUST_LOG="meda=info,integration_tests=info" cargo test --test integration_tests -- \
+            test_cli_help \
+            test_cli_list_empty \
+            test_cli_images_empty \
+            test_cli_get_nonexistent_vm \
+            test_cli_start_nonexistent_vm \
+            test_cli_stop_nonexistent_vm \
+            test_cli_delete_nonexistent_vm \
+            test_cli_port_forward_nonexistent_vm \
+            test_cli_rmi_nonexistent_image \
+            test_cli_prune_empty \
+            test_cli_pull_nonexistent_image \
+            test_cli_push_nonexistent_image \
+            test_cli_run_nonexistent_image \
+            test_cli_invalid_commands \
+            test_cli_json_flag_consistency \
+            test_cli_json_output_format \
+            --nocapture
+        timeout-minutes: 15
+
+      - name: Debug on test failure
+        if: failure()
+        run: |
+          echo "=== Integration Test Failure Debug Info ==="
+          echo "Disk space:"
+          df -h
+          echo ""
+          echo "Memory usage:"
+          free -h
+          echo ""
+          echo "Running processes:"
+          ps aux | grep -E "(cloud-hypervisor|qemu|meda)" || true
+
+      - name: Setup tmate session for debugging
+        if: failure()
+        uses: mxschmitt/action-tmate@v3
+        with:
+          limit-access-to-actor: true
+          timeout-minutes: 30
+
+      - name: Check disk space after tests
+        run: df -h
+        if: always()

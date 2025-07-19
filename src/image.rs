@@ -1234,6 +1234,17 @@ pub async fn create_from_vm(
         return Err(Error::Other(format!("VM {} rootfs not found", vm_name)));
     }
 
+    // Check if VM is running and stop it if necessary
+    if vm::check_vm_running(config, vm_name)? {
+        if !json {
+            info!("Stopping VM {} before creating image...", vm_name);
+        }
+        vm::stop(config, vm_name, json).await?;
+
+        // Wait a moment for the VM to fully shut down
+        tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+    }
+
     if !json {
         info!("Creating image from VM: {}", vm_name);
     }
@@ -1251,6 +1262,10 @@ pub async fn create_from_vm(
     // Copy VM rootfs as base image
     let image_raw = image_dir.join("base.raw");
     fs::copy(&vm_rootfs, &image_raw)?;
+
+    // Note: VM disk is copied as-is to preserve all customizations.
+    // Machine-specific data like hostname and network config are handled
+    // when creating new VMs from the image.
 
     let mut artifacts = HashMap::new();
     artifacts.insert("base_image".to_string(), "base.raw".to_string());
@@ -1310,6 +1325,7 @@ pub async fn create_from_vm(
 
     Ok(())
 }
+
 /// Run a VM from a local image
 pub async fn run_from_image(
     config: &Config,
@@ -1407,16 +1423,18 @@ pub async fn run_from_image(
         ));
     }
 
-    // Copy cloud-init files from image if they exist
+    // Copy user-data from image if it exists, but generate fresh meta-data and network-config
     for (artifact_type, artifact_file) in &manifest.artifacts {
         match artifact_type.as_str() {
-            "user-data" | "meta-data" | "network-config" => {
+            "user-data" => {
                 let source = image_dir.join(artifact_file);
                 let dest = vm_dir.join(artifact_file);
                 if source.exists() {
                     fs::copy(&source, &dest)?;
                 }
             }
+            // Skip meta-data and network-config - we'll generate fresh ones below
+            "meta-data" | "network-config" => {}
             _ => {} // Skip other artifacts like firmware, hypervisor binaries
         }
     }

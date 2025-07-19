@@ -1,103 +1,48 @@
-name: Build and Test
+name: All Tests
 
 on:
   push:
-    branches: [ "main" ]
+    branches: ["main"]
   pull_request:
-    branches: [ "main" ]
+    branches: ["main"]
 
-env:
-  CARGO_TERM_COLOR: always
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
-  check:
-    name: Check
+  # This workflow now acts as a meta-workflow that depends on all other test workflows
+  all-tests:
+    name: All Tests Complete
     runs-on: ubuntu-latest
+    needs:
+      - unit-tests
+      - integration-basic
+      - integration-vm-creation
+      - integration-vm-operations
+      - integration-advanced
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+      - name: All tests passed
+        run: echo "✅ All test workflows completed successfully!"
 
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+  # Unit tests and linting workflow
+  unit-tests:
+    uses: ./.github/workflows/unit-tests.yml
 
-      - name: Cache Rust dependencies
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ${{ runner.os }}-cargo-check-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-check-
-            ${{ runner.os }}-cargo-
+  # Basic integration tests (fast, no VM operations)
+  integration-basic:
+    uses: ./.github/workflows/integration-tests-basic.yml
 
-      - name: Check compilation
-        run: cargo check
+  # VM creation tests
+  integration-vm-creation:
+    uses: ./.github/workflows/integration-tests-vm-creation.yml
 
-  build:
-    name: Build
-    runs-on: ubuntu-latest
-    needs: check
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+  # VM operations tests
+  integration-vm-operations:
+    uses: ./.github/workflows/integration-tests-vm-operations.yml
 
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+  # Advanced integration tests (slow, complex operations)
+  integration-advanced:
+    uses: ./.github/workflows/integration-tests-advanced.yml
 
-      - name: Cache Rust dependencies
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ${{ runner.os }}-cargo-build-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-build-
-            ${{ runner.os }}-cargo-
-
-      - name: Build debug
-        run: cargo build --verbose
-
-      - name: Build release
-        run: cargo build --release --verbose
-
-  test:
-    name: Test
-    runs-on: ubuntu-latest
-    needs: check
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Cache Rust dependencies
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ${{ runner.os }}-cargo-test-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-test-
-            ${{ runner.os }}-cargo-
-
-      - name: Install system dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y qemu-utils genisoimage iptables jq sshpass
-
-      - name: Give the runner user rw access to /dev/kvm
-        run: sudo setfacl -m u:${USER}:rw /dev/kvm
-
-      - name: Run unit tests
-        run: cargo test --bins
-
-      - name: Run integration tests
-        run: cargo test --test integration_tests
 

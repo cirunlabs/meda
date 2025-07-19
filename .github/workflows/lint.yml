@@ -5,6 +5,11 @@ on:
     branches: [ "main" ]
   pull_request:
     branches: [ "main" ]
+  workflow_call:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 env:
   CARGO_TERM_COLOR: always
@@ -36,7 +41,7 @@ jobs:
 
       - name: Check formatting
         run: cargo fmt --all --check
-        
+
       - name: Run Clippy (all warnings as errors)
         run: cargo clippy --all-targets --all-features -- -D warnings
 
@@ -98,7 +103,7 @@ jobs:
           else
             echo "All files are valid text files"
           fi
-          
+
           # Check for Windows line endings (CRLF)
           if grep -l $'\r$' src/*.rs 2>/dev/null; then
             echo "Found Windows line endings (CRLF) in Rust files!"
@@ -130,7 +135,7 @@ jobs:
           grep -v '^\s*$' | \
           aspell list --lang=en_US --mode=html | \
           sort -u > potential_typos.txt || true
-          
+
           if [ -s potential_typos.txt ]; then
             echo "Potential spelling issues found in comments:"
             cat potential_typos.txt
@@ -147,7 +152,7 @@ jobs:
           xargs cat | \
           aspell list --lang=en_US --mode=html | \
           sort -u > doc_typos.txt || true
-          
+
           if [ -s doc_typos.txt ]; then
             echo "Potential spelling issues found in documentation:"
             cat doc_typos.txt
@@ -199,37 +204,6 @@ jobs:
             echo "No obvious hardcoded secrets found"
           fi
 
-  code-coverage:
-    name: Code Coverage
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Install system dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y qemu-utils genisoimage iptables jq
-
-      - name: Install tarpaulin
-        run: cargo install cargo-tarpaulin
-
-      - name: Generate code coverage
-        run: |
-          cargo tarpaulin --out xml --output-dir ./coverage --skip-clean || echo "Coverage generation failed"
-
-      - name: Upload coverage to Codecov (optional)
-        uses: codecov/codecov-action@v4
-        with:
-          file: ./coverage/cobertura.xml
-          fail_ci_if_error: false
-        env:
-          CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
-        continue-on-error: true
-
   summary:
     name: Quality Summary
     runs-on: ubuntu-latest
@@ -247,7 +221,7 @@ jobs:
           echo "| Spell Check | ${{ needs.spell-check.result }} |" >> $GITHUB_STEP_SUMMARY
           echo "| Security | ${{ needs.security.result }} |" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          
+
           if [[ "${{ needs.lint.result }}" == "failure" || "${{ needs.format-check.result }}" == "failure" ]]; then
             echo "❌ Code quality checks failed. Please fix the issues above." >> $GITHUB_STEP_SUMMARY
             exit 1
