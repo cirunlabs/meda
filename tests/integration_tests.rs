@@ -17,7 +17,7 @@ fn setup_test_env() -> TempDir {
     env::set_var("MEDA_VM_DIR", temp_dir.path().join("vms"));
     env::set_var("MEDA_CPUS", "1");
     env::set_var("MEDA_MEM", "512M");
-    env::set_var("MEDA_DISK_SIZE", "5G");
+    env::set_var("MEDA_DISK_SIZE", "3G"); // Reduced from 5G to save space in CI
     temp_dir
 }
 
@@ -51,6 +51,91 @@ fn cleanup_test_artifacts() {
 
     // Force cleanup environment variables
     cleanup_test_env();
+}
+
+// Verify all VMs are cleaned up - call this after each test
+fn verify_no_vms_left() -> Result<(), String> {
+    let mut cmd = Command::cargo_bin("meda").unwrap();
+    cmd.args(["list", "--json"]);
+    let output = cmd.output().unwrap();
+
+    if output.status.success() {
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        if let Ok(vms) = serde_json::from_str::<Vec<serde_json::Value>>(&stdout) {
+            if !vms.is_empty() {
+                let vm_names: Vec<String> = vms
+                    .iter()
+                    .filter_map(|v| v.get("name").and_then(|n| n.as_str()))
+                    .map(|s| s.to_string())
+                    .collect();
+                return Err(format!(
+                    "Test left VMs behind! Found {} VMs: {:?}",
+                    vms.len(),
+                    vm_names
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+// Enhanced test failure debugging
+fn debug_test_failure(test_name: &str) {
+    eprintln!("\n=== TEST FAILURE DEBUG INFO for {} ===", test_name);
+
+    // Show disk space
+    if let Ok(output) = Command::new("df").args(["-h"]).output() {
+        eprintln!("Disk space:");
+        eprintln!("{}", String::from_utf8_lossy(&output.stdout));
+    }
+
+    // List any remaining VMs
+    if let Ok(mut cmd) = Command::cargo_bin("meda") {
+        cmd.args(["list", "--json"]);
+        if let Ok(output) = cmd.output() {
+            eprintln!("Remaining VMs:");
+            eprintln!("{}", String::from_utf8_lossy(&output.stdout));
+        }
+    }
+
+    // Show VM directory contents
+    if let Ok(vm_dir) = env::var("MEDA_VM_DIR") {
+        eprintln!("VM directory contents:");
+        if let Ok(output) = Command::new("ls").args(["-la", &vm_dir]).output() {
+            eprintln!("{}", String::from_utf8_lossy(&output.stdout));
+        }
+
+        // Print cloud-hypervisor logs for all VMs
+        eprintln!("Cloud-hypervisor logs:");
+        if let Ok(entries) = std::fs::read_dir(&vm_dir) {
+            for entry in entries.flatten() {
+                if entry.file_type().map(|ft| ft.is_dir()).unwrap_or(false) {
+                    let vm_name = entry.file_name();
+                    let log_file = entry.path().join("ch.log");
+                    if log_file.exists() {
+                        eprintln!("--- ch.log for VM: {:?} ---", vm_name);
+                        if let Ok(log_content) = std::fs::read_to_string(&log_file) {
+                            // Print last 50 lines of the log to avoid overwhelming output
+                            let lines: Vec<&str> = log_content.lines().collect();
+                            let start = if lines.len() > 50 {
+                                lines.len() - 50
+                            } else {
+                                0
+                            };
+                            for line in &lines[start..] {
+                                eprintln!("{}", line);
+                            }
+                        } else {
+                            eprintln!("Failed to read log file: {:?}", log_file);
+                        }
+                        eprintln!("--- end ch.log for VM: {:?} ---", vm_name);
+                    }
+                }
+            }
+        }
+    }
+
+    eprintln!("=== END DEBUG INFO ===\n");
 }
 
 // Helper function to wait for SSH connectivity with retry
@@ -111,9 +196,9 @@ fn wait_for_vm_ready(ip: &str) -> bool {
     let result = vm_ready_check
         .retry(
             &ExponentialBuilder::default()
-                .with_min_delay(Duration::from_secs(5)) // Start with 5s
-                .with_max_delay(Duration::from_secs(15)) // Max 15s between retries
-                .with_max_times(12), // Try up to 12 times (total ~3 minutes)
+                .with_min_delay(Duration::from_secs(3)) // Start with 3s
+                .with_max_delay(Duration::from_secs(8)) // Max 8s between retries
+                .with_max_times(8), // Try up to 8 times (total ~1.5 minutes)
         )
         .call();
 
@@ -337,6 +422,16 @@ fn test_cli_create_vm_success() {
         .stdout(predicate::str::contains("success\": true"))
         .stdout(predicate::str::contains("Successfully created VM: test-vm"));
 
+    // Clean up the created VM
+    let mut cmd = Command::cargo_bin("meda").unwrap();
+    cmd.args(["delete", "test-vm", "--json"]);
+    cmd.assert().success();
+
+    // Verify cleanup
+    if let Err(e) = verify_no_vms_left() {
+        panic!("Test cleanup failed: {}", e);
+    }
+
     cleanup_test_env();
 }
 
@@ -427,12 +522,17 @@ fn test_cli_create_with_force_flag() {
     let _temp_dir = setup_test_env();
 
     let mut cmd = Command::cargo_bin("meda").unwrap();
-    cmd.args(["create", "test-vm", "--force", "--json"]);
+    cmd.args(["create", "test-vm-force", "--force", "--json"]);
 
     // Should succeed and accept the force flag
     cmd.assert()
         .success()
         .stdout(predicate::str::contains("success\": true"));
+
+    // Clean up the created VM
+    let mut cmd = Command::cargo_bin("meda").unwrap();
+    cmd.args(["delete", "test-vm-force", "--json"]);
+    cmd.assert().success();
 
     cleanup_test_env();
 }
@@ -450,7 +550,7 @@ fn test_cli_create_with_user_data() {
     let mut cmd = Command::cargo_bin("meda").unwrap();
     cmd.args([
         "create",
-        "test-vm",
+        "test-vm-userdata",
         user_data_file.to_str().unwrap(),
         "--json",
     ]);
@@ -459,6 +559,11 @@ fn test_cli_create_with_user_data() {
     cmd.assert()
         .success()
         .stdout(predicate::str::contains("success\": true"));
+
+    // Clean up the created VM
+    let mut cmd = Command::cargo_bin("meda").unwrap();
+    cmd.args(["delete", "test-vm-userdata", "--json"]);
+    cmd.assert().success();
 
     cleanup_test_env();
 }
@@ -749,7 +854,7 @@ fn test_ssh_connection(ip: &str) {
     let mut cmd = Command::new("ssh");
     cmd.args([
         "-o",
-        "ConnectTimeout=10",
+        "ConnectTimeout=5",
         "-o",
         "StrictHostKeyChecking=no",
         "-o",
@@ -792,7 +897,7 @@ fn test_ssh_connection_via_port(host: &str, port: u16) {
         "-p",
         &port.to_string(),
         "-o",
-        "ConnectTimeout=10",
+        "ConnectTimeout=5",
         "-o",
         "StrictHostKeyChecking=no",
         "-o",
@@ -866,10 +971,12 @@ fn test_cli_vm_to_image_customization_persistence() {
     );
     let mut cmd = Command::cargo_bin("meda").unwrap();
     cmd.args(["start", "test-persist-source", "--json"]);
-    let start_result = cmd.assert();
 
-    // Only proceed if VM start succeeded (requires proper hypervisor setup)
-    if start_result.try_success().is_ok() {
+    // Try to start the VM and capture the output
+    let output = cmd.output().unwrap();
+    let vm_started = output.status.success();
+
+    if vm_started {
         info!(
             "✅ [STEP 2] VM started successfully at: {:?}, proceeding with SSH verification",
             std::time::SystemTime::now()
@@ -1057,8 +1164,53 @@ fn test_cli_vm_to_image_customization_persistence() {
             "❌ [STEP 2] VM failed to start at: {:?}",
             std::time::SystemTime::now()
         );
-        error!("💀 [FATAL] VM must start for this test - failing test");
-        panic!("VM failed to start - cannot test artifact persistence without a running VM");
+
+        // Log the actual error output for debugging
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        error!("VM start command stdout: {}", stdout);
+        error!("VM start command stderr: {}", stderr);
+
+        // Try to read the cloud-hypervisor log for this specific VM
+        if let Ok(vm_dir) = env::var("MEDA_VM_DIR") {
+            let ch_log_path = std::path::PathBuf::from(vm_dir)
+                .join("test-persist-source")
+                .join("ch.log");
+            if ch_log_path.exists() {
+                error!("=== Cloud-hypervisor log for test-persist-source ===");
+                if let Ok(log_content) = std::fs::read_to_string(&ch_log_path) {
+                    // Print last 30 lines to avoid overwhelming output
+                    let lines: Vec<&str> = log_content.lines().collect();
+                    let start = if lines.len() > 30 {
+                        lines.len() - 30
+                    } else {
+                        0
+                    };
+                    for line in &lines[start..] {
+                        error!("{}", line);
+                    }
+                } else {
+                    error!("Failed to read ch.log file");
+                }
+                error!("=== End cloud-hypervisor log ===");
+            } else {
+                error!("No ch.log found at: {:?}", ch_log_path);
+            }
+        }
+
+        debug_test_failure("test_cli_vm_to_image_customization_persistence");
+
+        // Check if it's a known CI limitation
+        if stderr.contains("KVM") || stderr.contains("hypervisor") || stderr.contains("permission")
+        {
+            error!("⚠️  VM start failed due to hypervisor limitations in CI");
+            error!("ℹ️  This test requires VM start capability - failing as expected");
+        }
+
+        panic!(
+            "VM failed to start - cannot test artifact persistence without a running VM. Error: {}",
+            stderr
+        );
     }
 
     // Final cleanup
@@ -1092,12 +1244,15 @@ fn test_cli_vm_to_image_resource_preservation() {
         "--cpus",
         "2",
         "--disk",
-        "8G",
+        "4G", // Reduced from 8G to save space
         "--json",
     ]);
     cmd.assert()
         .success()
-        .stdout(predicate::str::contains("success\": true"));
+        .stdout(predicate::str::contains("success\": true"))
+        .stdout(predicate::str::contains(
+            "Successfully created VM: test-resource-source",
+        ));
 
     // Step 2: Verify source VM has correct resources
     println!("🔍 Step 2: Verifying source VM resources");
@@ -1108,12 +1263,12 @@ fn test_cli_vm_to_image_resource_preservation() {
     let stdout = std::str::from_utf8(&output.get_output().stdout).unwrap();
     if let Ok(vm_info) = serde_json::from_str::<serde_json::Value>(stdout) {
         assert_eq!(vm_info.get("memory").and_then(|v| v.as_str()), Some("1G"));
-        assert_eq!(vm_info.get("disk").and_then(|v| v.as_str()), Some("8G"));
+        assert_eq!(vm_info.get("disk").and_then(|v| v.as_str()), Some("4G"));
         if let Some(details) = vm_info.get("details") {
             assert_eq!(details.get("memory").and_then(|v| v.as_str()), Some("1G"));
             assert_eq!(
                 details.get("disk_size").and_then(|v| v.as_str()),
-                Some("8G")
+                Some("4G")
             );
         }
     }
@@ -1156,9 +1311,9 @@ fn test_cli_vm_to_image_resource_preservation() {
         "--name",
         "test-resource-custom",
         "--memory",
-        "2G",
+        "1G", // Reduced from 2G
         "--cpus",
-        "4",
+        "2", // Reduced from 4
         "--no-start",
         "--json",
     ]);
@@ -1175,9 +1330,9 @@ fn test_cli_vm_to_image_resource_preservation() {
     let output = cmd.assert().success();
     let stdout = std::str::from_utf8(&output.get_output().stdout).unwrap();
     if let Ok(vm_info) = serde_json::from_str::<serde_json::Value>(stdout) {
-        // Should have environment defaults (512M, 1 CPU) but disk from image (8G)
+        // Should have environment defaults (512M, 1 CPU) but disk from image (4G)
         assert_eq!(vm_info.get("memory").and_then(|v| v.as_str()), Some("512M"));
-        assert_eq!(vm_info.get("disk").and_then(|v| v.as_str()), Some("8G")); // Preserved from source
+        assert_eq!(vm_info.get("disk").and_then(|v| v.as_str()), Some("4G")); // Preserved from source
     }
 
     // Check custom VM
@@ -1187,8 +1342,8 @@ fn test_cli_vm_to_image_resource_preservation() {
     let stdout = std::str::from_utf8(&output.get_output().stdout).unwrap();
     if let Ok(vm_info) = serde_json::from_str::<serde_json::Value>(stdout) {
         // Should have custom resources
-        assert_eq!(vm_info.get("memory").and_then(|v| v.as_str()), Some("2G"));
-        assert_eq!(vm_info.get("disk").and_then(|v| v.as_str()), Some("8G")); // Preserved from source
+        assert_eq!(vm_info.get("memory").and_then(|v| v.as_str()), Some("1G"));
+        assert_eq!(vm_info.get("disk").and_then(|v| v.as_str()), Some("4G")); // Preserved from source
     }
 
     // Step 7: Clean up
@@ -1208,6 +1363,12 @@ fn test_cli_vm_to_image_resource_preservation() {
     cmd.assert().success();
 
     println!("✅ Resource preservation test completed successfully");
+
+    // Verify all VMs were cleaned up
+    if let Err(e) = verify_no_vms_left() {
+        panic!("Test cleanup failed: {}", e);
+    }
+
     cleanup_test_artifacts();
 }
 
@@ -1308,7 +1469,7 @@ fn test_ssh_with_commands(ip: &str) {
         let mut cmd = Command::new("ssh");
         cmd.args([
             "-o",
-            "ConnectTimeout=10",
+            "ConnectTimeout=5",
             "-o",
             "StrictHostKeyChecking=no",
             "-o",
@@ -1557,6 +1718,12 @@ fn test_complete_vm_to_image_to_vm_workflow() {
     cmd.assert().success();
 
     println!("🏁 Integration test completed");
+
+    // Verify all VMs were cleaned up
+    if let Err(e) = verify_no_vms_left() {
+        panic!("Test cleanup failed: {}", e);
+    }
+
     cleanup_test_artifacts();
 }
 
@@ -1574,7 +1741,7 @@ fn test_ssh_connectivity(ip: &str) -> bool {
         "cirun",
         "ssh",
         "-o",
-        "ConnectTimeout=10",
+        "ConnectTimeout=5",
         "-o",
         "StrictHostKeyChecking=no",
         "-o",

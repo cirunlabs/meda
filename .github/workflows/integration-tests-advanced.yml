@@ -1,0 +1,104 @@
+name: Integration Tests - Advanced
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+    branches: ["main"]
+  workflow_call:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  integration-advanced:
+    name: Advanced Integration Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-integration-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-integration-
+            ${{ runner.os }}-cargo-
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y qemu-utils genisoimage iptables jq sshpass
+
+      - name: Give the runner user rw access to /dev/kvm
+        run: sudo setfacl -m u:${USER}:rw /dev/kvm
+
+      - name: Check available disk space
+        run: df -h
+
+      - name: Run advanced integration tests
+        run: |
+          RUST_LOG="meda=info,integration_tests=info" cargo test --test integration_tests -- \
+            test_cli_vm_to_image_customization_persistence \
+            test_complete_vm_to_image_to_vm_workflow \
+            --nocapture
+        timeout-minutes: 55
+
+      - name: Debug on test failure
+        if: failure()
+        run: |
+          echo "=== Integration Test Failure Debug Info ==="
+          echo "Disk space:"
+          df -h
+          echo ""
+          echo "Memory usage:"
+          free -h
+          echo ""
+          echo "Running processes:"
+          ps aux | grep -E "(cloud-hypervisor|qemu|meda)" || true
+          echo ""
+          echo "Network interfaces:"
+          ip addr show
+          echo ""
+          echo "Iptables rules:"
+          sudo iptables -L -n -v || true
+          echo ""
+          echo "Test artifacts in /tmp:"
+          ls -la /tmp/.tmp* 2>/dev/null || true
+          echo ""
+          echo "System logs (last 50 lines):"
+          sudo journalctl -n 50 --no-pager || true
+          echo ""
+          echo "Cloud-hypervisor logs if any:"
+          find /tmp -name "*.log" -type f 2>/dev/null | head -5 | xargs cat || true
+          echo ""
+          echo "VM-specific cloud-hypervisor logs:"
+          find /tmp -name "ch.log" -type f 2>/dev/null | while read logfile; do
+            echo "=== $logfile ==="
+            tail -50 "$logfile" 2>/dev/null || cat "$logfile" 2>/dev/null || true
+            echo "=== end $logfile ==="
+          done
+
+      - name: Setup tmate session for debugging
+        if: failure()
+        uses: mxschmitt/action-tmate@v3
+        with:
+          limit-access-to-actor: true
+          timeout-minutes: 30
+
+      - name: Check disk space after tests
+        run: df -h
+        if: always()
