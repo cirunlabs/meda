@@ -1,0 +1,303 @@
+name: Build and Push Images
+
+on:
+  push:
+    branches: [ main, develop ]
+    paths:
+      - 'images/**'
+      - '.github/workflows/build-images.yml'
+  pull_request:
+    branches: [ main ]
+    paths:
+      - 'images/**'
+      - '.github/workflows/build-images.yml'
+  workflow_dispatch:
+    inputs:
+      image_name:
+        description: 'Image name to build (leave empty to build all)'
+        required: false
+        type: string
+      force_rebuild:
+        description: 'Force rebuild even if no changes detected'
+        required: false
+        type: boolean
+        default: false
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAMESPACE: ${{ github.repository_owner }}
+
+jobs:
+  detect-changes:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.changes.outputs.matrix }}
+      has-changes: ${{ steps.changes.outputs.has-changes }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Detect changed images
+        id: changes
+        run: |
+          # Create images directory if it doesn't exist
+          mkdir -p images
+
+          # Get list of all image directories
+          if [ -d "images" ]; then
+            image_dirs=$(find images -mindepth 1 -maxdepth 1 -type d -exec basename {} \; | sort)
+          else
+            image_dirs=""
+          fi
+
+          # If specific image requested via workflow_dispatch
+          if [ "${{ github.event.inputs.image_name }}" != "" ]; then
+            if echo "$image_dirs" | grep -q "^${{ github.event.inputs.image_name }}$"; then
+              matrix="[\"${{ github.event.inputs.image_name }}\"]"
+              has_changes="true"
+            else
+              echo "Error: Image '${{ github.event.inputs.image_name }}' not found"
+              exit 1
+            fi
+          # Force rebuild all images
+          elif [ "${{ github.event.inputs.force_rebuild }}" == "true" ]; then
+            if [ -n "$image_dirs" ]; then
+              matrix=$(echo "$image_dirs" | jq -R -s -c 'split("\n")[:-1]')
+              has_changes="true"
+            else
+              matrix="[]"
+              has_changes="false"
+            fi
+          # Detect changes for push/PR events
+          else
+            if [ "${{ github.event_name }}" == "pull_request" ]; then
+              base_sha="${{ github.event.pull_request.base.sha }}"
+            else
+              base_sha="${{ github.event.before }}"
+            fi
+
+            changed_dirs=""
+            if [ -n "$image_dirs" ]; then
+              for dir in $image_dirs; do
+                if git diff --quiet "$base_sha" HEAD -- "images/$dir/" 2>/dev/null; then
+                  continue
+                else
+                  changed_dirs="$changed_dirs $dir"
+                fi
+              done
+            fi
+
+            if [ -n "$changed_dirs" ]; then
+              matrix=$(echo $changed_dirs | tr ' ' '\n' | jq -R -s -c 'split("\n")[:-1] | map(select(length > 0))')
+              has_changes="true"
+            else
+              matrix="[]"
+              has_changes="false"
+            fi
+          fi
+
+          echo "matrix=$matrix" >> $GITHUB_OUTPUT
+          echo "has-changes=$has_changes" >> $GITHUB_OUTPUT
+          echo "Detected images to build: $matrix"
+
+  build-images:
+    needs: detect-changes
+    if: needs.detect-changes.outputs.has-changes == 'true'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        image: ${{ fromJson(needs.detect-changes.outputs.matrix) }}
+
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v4
+        with:
+          go-version: '1.21'
+
+      - name: Cache Go modules
+        uses: actions/cache@v3
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
+          restore-keys: |
+            ${{ runner.os }}-go-
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            qemu-utils \
+            genisoimage \
+            bridge-utils \
+            iptables \
+            curl \
+            jq
+
+      - name: Build and install Meda
+        run: |
+          cargo build --release
+          sudo cp target/release/meda /usr/local/bin/
+          meda --version
+
+      - name: Download and install Packer
+        run: |
+          PACKER_VERSION="1.10.0"
+          curl -fsSL https://releases.hashicorp.com/packer/${PACKER_VERSION}/packer_${PACKER_VERSION}_linux_amd64.zip -o packer.zip
+          unzip packer.zip
+          sudo mv packer /usr/local/bin/
+          packer version
+
+      - name: Build Packer plugin
+        run: |
+          cd packer-plugin-meda
+          go mod tidy
+          go build -o packer-plugin-meda
+
+      - name: Install Packer plugin
+        run: |
+          cd packer-plugin-meda
+          packer plugins install --path packer-plugin-meda github.com/cirunlabs/meda
+
+      - name: Setup Meda environment
+        run: |
+          # Create meda config directory
+          mkdir -p ~/.meda
+
+          # Download required dependencies
+          meda --help || true  # This will trigger dependency downloads
+
+      - name: Start Meda API server
+        run: |
+          # Start Meda API server in background
+          meda serve --host 127.0.0.1 --port 7777 &
+          sleep 10
+
+          # Verify API is running
+          curl -f http://127.0.0.1:7777/api/v1/health || exit 1
+
+      - name: Validate Packer template
+        run: |
+          cd images/${{ matrix.image }}
+          packer validate .
+
+      - name: Build image with Packer
+        run: |
+          cd images/${{ matrix.image }}
+          packer build .
+
+      - name: Log in to Container Registry
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract image metadata
+        id: meta
+        run: |
+          cd images/${{ matrix.image }}
+
+          # Extract metadata from Packer template
+          if [ -f "metadata.json" ]; then
+            image_name=$(jq -r '.image_name // "${{ matrix.image }}"' metadata.json)
+            image_tag=$(jq -r '.image_tag // "latest"' metadata.json)
+            image_description=$(jq -r '.description // ""' metadata.json)
+          else
+            image_name="${{ matrix.image }}"
+            image_tag="latest"
+            image_description=""
+          fi
+
+          # Add timestamp for development builds
+          if [ "${{ github.ref }}" != "refs/heads/main" ]; then
+            timestamp=$(date +%Y%m%d-%H%M%S)
+            image_tag="${image_tag}-dev-${timestamp}"
+          fi
+
+          full_image_name="${{ env.REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/${image_name}:${image_tag}"
+
+          echo "image-name=${image_name}" >> $GITHUB_OUTPUT
+          echo "image-tag=${image_tag}" >> $GITHUB_OUTPUT
+          echo "full-image-name=${full_image_name}" >> $GITHUB_OUTPUT
+          echo "description=${image_description}" >> $GITHUB_OUTPUT
+
+      - name: Push image to registry
+        if: github.event_name != 'pull_request'
+        run: |
+          # Get the locally built image name from Packer output
+          local_image=$(meda images list --json | jq -r '.[] | select(.name | contains("${{ matrix.image }}")) | .name' | head -1)
+
+          if [ -z "$local_image" ]; then
+            echo "Error: Could not find built image for ${{ matrix.image }}"
+            exit 1
+          fi
+
+          # Push image using Meda
+          meda images push \
+            --name "$local_image" \
+            --image "${{ steps.meta.outputs.full-image-name }}" \
+            --registry "${{ env.REGISTRY }}" \
+            --org "${{ env.IMAGE_NAMESPACE }}"
+
+      - name: Generate build summary
+        run: |
+          {
+            echo "## Image Build Summary"
+            echo ""
+            echo "- **Image**: ${{ matrix.image }}"
+            echo "- **Registry**: ${{ steps.meta.outputs.full-image-name }}"
+            echo "- **Description**: ${{ steps.meta.outputs.description }}"
+            echo "- **Build Date**: $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
+            echo "- **Git SHA**: ${{ github.sha }}"
+            echo ""
+            if [ "${{ github.event_name }}" != "pull_request" ]; then
+              echo "✅ Image successfully built and pushed to registry"
+            else
+              echo "✅ Image successfully built (not pushed - PR build)"
+            fi
+          } >> $GITHUB_STEP_SUMMARY
+
+      - name: Cleanup
+        if: always()
+        run: |
+          # Stop Meda API server
+          pkill meda || true
+
+          # Clean up any VMs that might be left over
+          meda list --json 2>/dev/null | jq -r '.[].name' | grep -E '^packer-' | xargs -r -I {} meda delete {} || true
+
+          # Clean up temporary images
+          meda images list --json 2>/dev/null | jq -r '.[].name' | grep -E 'packer-|temp-' | xargs -r -I {} meda images rm {} || true
+
+  summary:
+    needs: [detect-changes, build-images]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Build Summary
+        run: |
+          echo "## Build Results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          if [ "${{ needs.detect-changes.outputs.has-changes }}" == "false" ]; then
+            echo "ℹ️ No images changed - skipped build" >> $GITHUB_STEP_SUMMARY
+          elif [ "${{ needs.build-images.result }}" == "success" ]; then
+            echo "✅ All images built successfully" >> $GITHUB_STEP_SUMMARY
+          elif [ "${{ needs.build-images.result }}" == "failure" ]; then
+            echo "❌ Some image builds failed" >> $GITHUB_STEP_SUMMARY
+          elif [ "${{ needs.build-images.result }}" == "cancelled" ]; then
+            echo "⏹️ Build was cancelled" >> $GITHUB_STEP_SUMMARY
+          fi

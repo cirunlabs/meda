@@ -1,0 +1,257 @@
+name: Build and Release Packer Plugin
+
+on:
+  push:
+    branches: [ main, develop ]
+    paths:
+      - 'packer-plugin-meda/**'
+      - '.github/workflows/packer-plugin.yml'
+  pull_request:
+    branches: [ main ]
+    paths:
+      - 'packer-plugin-meda/**'
+      - '.github/workflows/packer-plugin.yml'
+  release:
+    types: [published]
+  workflow_dispatch:
+
+env:
+  GO_VERSION: "1.21"
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v4
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      - name: Cache Go modules
+        uses: actions/cache@v3
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: ${{ runner.os }}-go-${{ hashFiles('packer-plugin-meda/go.sum') }}
+          restore-keys: |
+            ${{ runner.os }}-go-
+
+      - name: Run tests
+        run: |
+          cd packer-plugin-meda
+          go mod tidy
+          go test -v ./...
+
+      - name: Run linting
+        uses: golangci/golangci-lint-action@v3
+        with:
+          version: latest
+          working-directory: packer-plugin-meda
+
+  build:
+    needs: test
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        goos: [linux, darwin, windows]
+        goarch: [amd64, arm64]
+        exclude:
+          - goos: windows
+            goarch: arm64
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v4
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      - name: Cache Go modules
+        uses: actions/cache@v3
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: ${{ runner.os }}-go-${{ hashFiles('packer-plugin-meda/go.sum') }}
+          restore-keys: |
+            ${{ runner.os }}-go-
+
+      - name: Build plugin
+        run: |
+          cd packer-plugin-meda
+          go mod tidy
+
+          # Set version from git tag or commit
+          if [[ "${{ github.ref }}" == refs/tags/* ]]; then
+            VERSION=${GITHUB_REF#refs/tags/}
+          else
+            VERSION="dev-${GITHUB_SHA::8}"
+          fi
+
+          # Build binary
+          BINARY_NAME="packer-plugin-meda"
+          if [ "${{ matrix.goos }}" == "windows" ]; then
+            BINARY_NAME="${BINARY_NAME}.exe"
+          fi
+
+          GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} go build \
+            -ldflags="-s -w -X main.Version=${VERSION}" \
+            -o "dist/${BINARY_NAME}_${{ matrix.goos }}_${{ matrix.goarch }}" \
+            .
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v3
+        with:
+          name: packer-plugin-meda-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: packer-plugin-meda/dist/
+          retention-days: 7
+
+  integration-test:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v4
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      - name: Download Linux AMD64 artifact
+        uses: actions/download-artifact@v3
+        with:
+          name: packer-plugin-meda-linux-amd64
+          path: packer-plugin-meda/dist/
+
+      - name: Install Packer
+        run: |
+          PACKER_VERSION="1.10.0"
+          curl -fsSL https://releases.hashicorp.com/packer/${PACKER_VERSION}/packer_${PACKER_VERSION}_linux_amd64.zip -o packer.zip
+          unzip packer.zip
+          sudo mv packer /usr/local/bin/
+          packer version
+
+      - name: Install plugin
+        run: |
+          cd packer-plugin-meda
+          chmod +x dist/packer-plugin-meda_linux_amd64
+          cp dist/packer-plugin-meda_linux_amd64 packer-plugin-meda
+          packer plugins install --path packer-plugin-meda github.com/cirunlabs/meda
+
+      - name: Validate Packer templates
+        run: |
+          # Install system dependencies for validation
+          sudo apt-get update
+          sudo apt-get install -y qemu-utils genisoimage
+
+          # Build and install Meda for validation
+          cargo build --release
+          sudo cp target/release/meda /usr/local/bin/
+
+          # Validate templates
+          cd images/ubuntu-minimal
+          packer validate template.pkr.hcl
+
+          cd ../ubuntu-docker
+          packer validate template.pkr.hcl
+
+  release:
+    if: github.event_name == 'release'
+    needs: [test, build, integration-test]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v4
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      - name: Install GoReleaser
+        uses: goreleaser/goreleaser-action@v5
+        with:
+          distribution: goreleaser
+          version: latest
+          install-only: true
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v3
+        with:
+          path: artifacts/
+
+      - name: Create release
+        run: |
+          cd packer-plugin-meda
+
+          # Set up environment for release
+          export GITHUB_TOKEN="${{ secrets.GITHUB_TOKEN }}"
+
+          # Run GoReleaser
+          goreleaser release --clean
+
+      - name: Generate plugin manifest
+        run: |
+          cd packer-plugin-meda
+
+          # Create plugin manifest for Packer Registry
+          cat > plugin-manifest.json << EOF
+          {
+            "name": "meda",
+            "version": "${{ github.event.release.tag_name }}",
+            "description": "Packer plugin for building VM images with Meda",
+            "author": "CirumLabs",
+            "license": "MIT",
+            "source": "https://github.com/cirunlabs/packer-plugin-meda",
+            "releases": []
+          }
+          EOF
+
+      - name: Update release with manifest
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ github.event.release.upload_url }}
+          asset_path: packer-plugin-meda/plugin-manifest.json
+          asset_name: plugin-manifest.json
+          asset_content_type: application/json
+
+  update-docs:
+    if: github.ref == 'refs/heads/main'
+    needs: [test, build]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Update documentation
+        run: |
+          cd packer-plugin-meda
+
+          # Update version in README if this is a release
+          if [[ "${{ github.event_name }}" == "release" ]]; then
+            VERSION="${{ github.event.release.tag_name }}"
+            sed -i "s/version = \">= [^\"]*\"/version = \">= ${VERSION#v}\"/" README.md
+          fi
+
+      - name: Commit documentation updates
+        if: github.event_name == 'release'
+        run: |
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+          git add .
+          git diff --staged --quiet || git commit -m "docs: update plugin version to ${{ github.event.release.tag_name }}"
+          git push

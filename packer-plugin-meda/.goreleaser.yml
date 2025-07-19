@@ -1,0 +1,90 @@
+project_name: packer-plugin-meda
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: plugin
+    binary: packer-plugin-meda
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    ignore:
+      - goos: windows
+        goarch: arm64
+    ldflags:
+      - -s -w
+      - -X main.Version={{.Version}}
+      - -X main.VersionPrerelease=
+    mod_timestamp: '{{ .CommitTimestamp }}'
+
+archives:
+  - id: plugin
+    builds:
+      - plugin
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    format: zip
+    files:
+      - LICENSE*
+      - README*
+      - CHANGELOG*
+
+checksum:
+  name_template: '{{ .ProjectName }}_{{ .Version }}_SHA256SUMS'
+
+changelog:
+  sort: asc
+  use: github
+  filters:
+    exclude:
+      - '^docs:'
+      - '^test:'
+      - '^ci:'
+      - Merge pull request
+      - Merge branch
+  groups:
+    - title: Features
+      regexp: "^.*feat[(\\w)]*:+.*$"
+      order: 0
+    - title: 'Bug fixes'
+      regexp: "^.*fix[(\\w)]*:+.*$"
+      order: 1
+    - title: Others
+      order: 999
+
+release:
+  github:
+    owner: cirunlabs
+    name: packer-plugin-meda
+  draft: false
+  prerelease: auto
+  name_template: "v{{ .Version }}"
+  header: |
+    ## Packer Plugin for Meda v{{ .Version }}
+
+    This release includes the Packer plugin for building VM images with Meda.
+
+    ### Installation
+
+    ```bash
+    packer plugins install github.com/cirunlabs/meda v{{ .Version }}
+    ```
+
+    ### Usage
+
+    See the [documentation](https://github.com/cirunlabs/packer-plugin-meda/blob/main/README.md) for usage examples.
+
+snapshot:
+  name_template: "{{ .Version }}-SNAPSHOT-{{ .ShortCommit }}"
+
+signs:
+  - artifacts: checksum
+    cmd: gpg
+    args: ["--batch", "--local-user", "{{ .Env.GPG_FINGERPRINT }}", "--output", "${signature}", "--detach-sign", "${artifact}"]
