@@ -1,0 +1,8 @@
+{
+  "image_name": "ubuntu-minimal",
+  "image_tag": "latest",
+  "description": "Minimal Ubuntu 22.04 LTS with basic tools",
+  "base_image": "ubuntu:latest",
+  "tools": ["curl", "wget", "vim", "htop"],
+  "architecture": "amd64"
+}
