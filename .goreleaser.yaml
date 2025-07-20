@@ -46,8 +46,8 @@ changelog:
 
 release:
   github:
-    owner: "aktech"
-    name: "chvisor-example"
+    owner: "cirunlabs"
+    name: "meda"
   footer: >-
     ---
     Released by [GoReleaser](https://github.com/goreleaser/goreleaser).

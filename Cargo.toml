@@ -1,9 +1,14 @@
 [package]
 name = "meda"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 description = "Cloud-Hypervisor micro-VM manager"
 authors = ["Amit Kumar <amit@cirun.io>"]
+license = "MIT"
+repository = "https://github.com/cirunlabs/meda"
+homepage = "https://github.com/cirunlabs/meda"
+keywords = ["virtualization", "vm", "cloud-hypervisor"]
+categories = ["command-line-utilities", "virtualization"]
 
 [dependencies]
 clap = { version = "4.4", features = ["derive"] }
