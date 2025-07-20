@@ -1338,12 +1338,14 @@ pub async fn run_from_image(
 
     let image_dir = image_ref.local_dir(config);
 
-    // Check if image exists locally
+    // Check if image exists locally, if not, automatically pull it
     if !image_dir.exists() {
-        return Err(Error::ImageNotFound(format!(
-            "Image {} not found locally. Use 'meda pull {}' or 'meda create-image' to get the image first.",
-            image_ref.url(), image_ref.url()
-        )));
+        if !json {
+            info!("📥 Image not found locally, pulling: {}", image_ref.url());
+        }
+
+        // Attempt to pull the image automatically
+        pull(config, image, options.registry, options.org, json).await?;
     }
 
     // Load image manifest
