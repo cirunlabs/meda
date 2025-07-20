@@ -1,11 +1,11 @@
 <div align="center">
   <img src="meda.png" alt="Meda" width="300"/>
   
-  # Meda
-  
+  <img src="meda-command.png" alt="Meda"/>
+
+
   **Cloud-Hypervisor VM management**
-  
-  [![Build Status](https://github.com/cirunlabs/meda/workflows/CI/badge.svg)](https://github.com/cirunlabs/meda/actions)
+
   [![Rust](https://img.shields.io/badge/rust-1.70%2B-orange.svg)](https://www.rust-lang.org)
   [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
   
