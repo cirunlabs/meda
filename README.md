@@ -1,67 +1,240 @@
-# Meda - Cloud-Hypervisor VM Manager
+<div align="center">
+  <img src="meda.png" alt="Meda" width="300"/>
+  
+  # Meda
+  
+  **Cloud-Hypervisor VM management**
+  
+  [![Build Status](https://github.com/cirunlabs/meda/workflows/CI/badge.svg)](https://github.com/cirunlabs/meda/actions)
+  [![Rust](https://img.shields.io/badge/rust-1.70%2B-orange.svg)](https://www.rust-lang.org)
+  [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+  
+  > ⚠️ **Alpha Software**: Meda is currently in alpha. Features and APIs may change.
+  
+</div>
 
-A Rust-based CLI tool for managing Cloud-Hypervisor micro-VMs.
+---
 
-## Features
+## What is Meda?
 
-- Create, list, start, stop, and delete VMs
-- Port forwarding
-- Network management
-- Cloud-init integration
+Meda is a wrapper around Cloud-Hypervisor that provides CLI and REST API management for micro-VMs with support for OCI images.
+
+**Features:**
+- VM lifecycle management (create, start, stop, delete)
+- OCI image support (pull, push, run from container registries)
+- REST API with Swagger documentation
+- Packer integration for automated builds
+- Network management and VM connectivity
+
+## Quick Start
+
+```bash
+# Install Meda
+cargo install --path .
+
+# Create and start your first VM
+meda create my-vm --memory 2G --cpus 4
+meda start my-vm
+
+# Or run directly from an image
+meda run ubuntu:latest --name web-server --memory 1G
+```
+
+## Core Features
+
+### 🖥️ VM Lifecycle Management
+Complete control over your micro-VMs with intuitive commands:
+
+```bash
+# Create VMs with custom resources
+meda create web-server --memory 4G --cpus 8 --disk 50G
+
+# List all VMs with status
+meda list
+
+# Get detailed VM information
+meda get web-server
+
+# VM control
+meda start web-server
+meda stop web-server
+meda delete web-server
+```
+
+### 🌐 Network Management
+Get VM connectivity information:
+
+```bash
+# Get VM IP address
+meda ip web-server
+```
+
+### 📦 Container-Style Image Management
+Work with VM images like container images:
+
+```bash
+# Pull images from registries
+meda pull ubuntu:latest
+meda pull ghcr.io/cirunlabs/ubuntu:22.04
+
+# Run VM from image
+meda run ubuntu:latest --name my-ubuntu
+
+# Create custom images from VMs
+meda create-image my-custom-image --from-vm configured-vm
+
+# Push images to registries
+meda push my-custom-image ghcr.io/myorg/my-image:v1.0
+
+# Clean up unused images
+meda prune-images
+```
+
+### 🔌 REST API Server
+Full-featured HTTP API with Swagger documentation:
+
+```bash
+# Start API server (localhost only)
+meda serve --port 7777
+
+# Start on all interfaces (accessible from VM's external IP)
+meda serve --port 7777 --host 0.0.0.0
+```
+
+Access Swagger UI at: `http://your-host:7777/swagger-ui`
+
+#### API Examples
+
+```bash
+# Create VM via API
+curl -X POST http://localhost:7777/api/v1/vms \
+  -H "Content-Type: application/json" \
+  -d '{"name": "api-vm", "memory": "2G", "cpus": 4}'
+
+# Pull and run image
+curl -X POST http://localhost:7777/api/v1/images/run \
+  -H "Content-Type: application/json" \
+  -d '{"image": "ubuntu:latest", "name": "api-ubuntu", "memory": "1G"}'
+
+# Get VM IP address
+curl http://localhost:7777/api/v1/vms/api-vm/ip
+```
+
+### 🏗️ Packer Integration
+Automate image building with HashiCorp Packer:
+
+```hcl
+# example.pkr.hcl
+packer {
+  required_plugins {
+    meda = {
+      version = ">= 1.0.0"
+      source = "github.com/cirunlabs/meda"
+    }
+  }
+}
+
+source "meda-vm" "web-server" {
+  vm_name           = "nginx-base"
+  base_image        = "ubuntu:latest"
+  memory            = "2G"
+  cpus              = 4
+  output_image_name = "nginx-server"
+  ssh_username      = "ubuntu"
+}
+
+build {
+  sources = ["source.meda-vm.web-server"]
+
+  provisioner "shell" {
+    inline = [
+      "sudo apt-get update",
+      "sudo apt-get install -y nginx",
+      "sudo systemctl enable nginx"
+    ]
+  }
+}
+```
 
 ## Installation
 
-### From Releases
-
-Download the latest release from the [Releases page](https://github.com/yourusername/ch-vm/releases).
-
 ### From Source
-
 ```bash
+git clone https://github.com/cirunlabs/meda.git
+cd meda
 cargo install --path .
 ```
 
-## Usage
+### System Requirements
+- Linux with KVM support
+- iptables
+- qemu-utils (`sudo apt install qemu-utils`)
+- genisoimage (`sudo apt install genisoimage`)
+
+## Configuration
+
+Customize default VM settings with environment variables:
 
 ```bash
-# Create a new VM
-meda create my-vm
-
-# List all VMs
-meda list
-
-# Get VM details
-meda get my-vm
-
-# Start a VM
-meda start my-vm
-
-# Stop a VM
-meda stop my-vm
-
-# Delete a VM
-meda delete my-vm
-
-# Forward host port to guest port
-meda port-forward my-vm 8080 80
+export MEDA_CPUS=4              # Default CPU count
+export MEDA_MEM=2G              # Default memory
+export MEDA_DISK_SIZE=20G       # Default disk size
+export MEDA_ASSET_DIR=~/meda    # Asset storage location
+export MEDA_VM_DIR=~/meda/vms   # VM storage location
 ```
 
-## Environment Variables
+## Architecture
 
-- `CH_CPUS`: Number of virtual CPUs (default: 2)
-- `CH_MEM`: Memory size (default: 1024M)
-- `CH_DISK_SIZE`: Disk size (default: 10G)
-- `CH_ASSET_DIR`: Assets directory (default: ~/.ch-vms/assets)
-- `CH_VM_DIR`: VM directory (default: ~/.ch-vms/vms)
+Meda is built with modern Rust practices:
 
-## Requirements
+- **Async/Await**: Full async runtime with Tokio
+- **REST API**: Axum framework with OpenAPI/Swagger docs
+- **Error Handling**: Comprehensive error types with `anyhow` and `thiserror`
+- **Cloud-Init**: Automated guest configuration
+- **Modular Design**: Clean separation between CLI, API, and core VM operations
 
-- Linux with iptables
-- qemu-utils (for qemu-img)
-- genisoimage
-- jq
+## Use Cases
 
-## References
+### Development Environment
+```bash
+# Spin up isolated development environments
+meda run ubuntu:latest --name dev-env --memory 4G
+meda ip dev-env  # Get VM IP for SSH access
+```
 
-- [Cloud-Hypervisor Networking](https://github.com/cloud-hypervisor/cloud-hypervisor/blob/0dafd47a7ccc64100ecd73a7d31b8540d253c649/docs/networking.md)
-- [Cloud-Hypervisor MacVTap Bridge](https://github.com/cloud-hypervisor/cloud-hypervisor/blob/3081d01fc37a05af84ff44aeaebcbb5c96f31da8/docs/macvtap-bridge.md)
+### Microservices Testing
+```bash
+# Create multiple service instances
+meda run redis:latest --name redis-test
+meda run postgres:latest --name db-test
+meda run nginx:latest --name web-test
+```
+
+### CI/CD Pipelines
+```bash
+# Build custom images with Packer
+packer build web-server.pkr.hcl
+
+# Deploy via API
+curl -X POST http://ci-server:7777/api/v1/images/run \
+  -d '{"image": "my-app:latest", "name": "production-app"}'
+```
+
+## Contributing
+
+We welcome contributions! Run quality checks before submitting:
+
+```bash
+# Quick checks (recommended for frequent use)
+./scripts/quick-check.sh
+
+# Full quality checks (recommended before pushing)
+./scripts/check-quality.sh
+
+# Full quality checks including integration tests
+./scripts/check-quality.sh --with-integration
+```
+
+## License
+
+MIT License - see [LICENSE](LICENSE) for details.

@@ -854,12 +854,13 @@ async fn get_vm_list(config: &crate::config::Config) -> crate::error::Result<Vec
                 .unwrap_or_else(|_| config.disk_size.clone())
                 .trim()
                 .to_string();
-            
+
             // Get creation time from directory metadata
             let created = match fs::metadata(&path) {
                 Ok(metadata) => {
                     if let Ok(created_time) = metadata.created() {
-                        if let Ok(since_epoch) = created_time.duration_since(std::time::UNIX_EPOCH) {
+                        if let Ok(since_epoch) = created_time.duration_since(std::time::UNIX_EPOCH)
+                        {
                             crate::util::format_timestamp(since_epoch.as_secs())
                         } else {
                             "unknown".to_string()

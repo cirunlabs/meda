@@ -182,7 +182,7 @@ pub fn write_string_to_file(path: &Path, content: &str) -> Result<()> {
 /// Convert a duration to a human-readable format
 pub fn format_duration(duration: Duration) -> String {
     let secs = duration.as_secs();
-    
+
     if secs < 60 {
         format!("{} seconds ago", secs)
     } else if secs < 3600 {
@@ -215,7 +215,7 @@ pub fn format_timestamp(timestamp: u64) -> String {
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs();
-    
+
     if timestamp > now {
         "in the future".to_string()
     } else {

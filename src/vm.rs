@@ -437,12 +437,13 @@ pub async fn list(config: &Config, json: bool) -> Result<()> {
             let ip = get_vm_ip(config, &name).unwrap_or_else(|_| "N/A".to_string());
             let memory = get_vm_memory(config, &name).unwrap_or_else(|_| config.mem.clone());
             let disk = get_vm_disk_size(config, &name).unwrap_or_else(|_| config.disk_size.clone());
-            
+
             // Get creation time from directory metadata
             let created = match fs::metadata(&path) {
                 Ok(metadata) => {
                     if let Ok(created_time) = metadata.created() {
-                        if let Ok(since_epoch) = created_time.duration_since(std::time::UNIX_EPOCH) {
+                        if let Ok(since_epoch) = created_time.duration_since(std::time::UNIX_EPOCH)
+                        {
                             crate::util::format_timestamp(since_epoch.as_secs())
                         } else {
                             "unknown".to_string()
