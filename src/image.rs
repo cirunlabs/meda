@@ -1087,14 +1087,7 @@ pub async fn list(config: &Config, json: bool) -> Result<()> {
                                             "{:.2} MB",
                                             total_size as f64 / 1024.0 / 1024.0
                                         );
-                                        let created_str = format!(
-                                            "{} seconds ago",
-                                            std::time::SystemTime::now()
-                                                .duration_since(std::time::UNIX_EPOCH)
-                                                .unwrap_or_default()
-                                                .as_secs()
-                                                - manifest.created
-                                        );
+                                        let created_str = crate::util::format_timestamp(manifest.created);
 
                                         images.push(ImageInfo {
                                             name: manifest.name,
@@ -1120,7 +1113,7 @@ pub async fn list(config: &Config, json: bool) -> Result<()> {
     } else {
         println!(
             "{:<20} {:<10} {:<15} {:<12} {:<20}",
-            "NAME", "TAG", "REGISTRY", "SIZE", "CREATED"
+            "name", "tag", "registry", "size", "created"
         );
         println!("{}", "-".repeat(85));
         for image in images {

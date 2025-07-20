@@ -43,6 +43,8 @@ pub struct VmInfo {
     pub memory: String,
     /// Disk size
     pub disk: String,
+    /// Creation time
+    pub created: String,
 }
 
 /// VM list response
@@ -211,6 +213,7 @@ impl From<crate::vm::VmInfo> for VmInfo {
             ip: vm_info.ip,
             memory: vm_info.memory,
             disk: vm_info.disk,
+            created: vm_info.created,
         }
     }
 }

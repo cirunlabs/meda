@@ -5,7 +5,9 @@ import (
 	"fmt"
 	"time"
 
+	"golang.org/x/crypto/ssh"
 	"github.com/hashicorp/hcl/v2/hcldec"
+	"github.com/hashicorp/packer-plugin-sdk/communicator"
 	"github.com/hashicorp/packer-plugin-sdk/multistep"
 	"github.com/hashicorp/packer-plugin-sdk/multistep/commonsteps"
 	"github.com/hashicorp/packer-plugin-sdk/packer"
@@ -49,10 +51,38 @@ func (b *Builder) Run(ctx context.Context, ui packer.Ui, hook packer.Hook) (pack
 
 	// Build the steps
 	steps := []multistep.Step{
+		&stepPullImage{},
 		&stepCreateVM{},
 		&stepStartVM{},
 		&stepWaitForVM{},
+		
+		// SSH Key Generation (conditional - only if using key pair auth)
+		multistep.If(b.config.Comm.Type == "ssh" && b.config.Comm.SSHPrivateKeyFile == "" && b.config.Comm.SSHPassword == "",
+			&communicator.StepSSHKeyGen{
+				CommConf: &b.config.Comm,
+			}),
+		
+		// SSH Connection
+		&communicator.StepConnect{
+			Config: &b.config.Comm,
+			Host: func(stateBag multistep.StateBag) (string, error) {
+				vmIP := stateBag.Get("vm_ip").(string)
+				return vmIP, nil
+			},
+			SSHConfig: func(multistep.StateBag) (*ssh.ClientConfig, error) {
+				sshConfig, err := b.config.Comm.SSHConfigFunc()(state)
+				if err != nil {
+					return nil, err
+				}
+				// Disable host key checking for development VMs
+				sshConfig.HostKeyCallback = ssh.InsecureIgnoreHostKey()
+				return sshConfig, nil
+			},
+		},
+		
+		// Provisioning
 		&commonsteps.StepProvision{},
+		
 		&stepStopVM{},
 		&stepCreateImage{},
 		&stepPushImage{},

@@ -1,17 +1,121 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"fmt"
 	"log"
 	"os"
 	"os/exec"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/hashicorp/packer-plugin-sdk/multistep"
 	"github.com/hashicorp/packer-plugin-sdk/packer"
 )
+
+// stepPullImage ensures the base image is available locally
+type stepPullImage struct{}
+
+func (s *stepPullImage) Run(ctx context.Context, state multistep.StateBag) multistep.StepAction {
+	config := state.Get("config").(*Config)
+	ui := state.Get("ui").(packer.Ui)
+
+	ui.Say(fmt.Sprintf("Ensuring base image '%s' is available locally", config.BaseImage))
+
+	// First check if image exists locally
+	var checkCmd *exec.Cmd
+	if config.UseAPI {
+		checkCmd = exec.Command("curl", "-s",
+			fmt.Sprintf("http://%s:%d/api/v1/images", config.MedaHost, config.MedaPort))
+	} else {
+		if config.MedaBinary == "cargo" {
+			checkCmd = exec.Command("cargo", "run", "--", "images")
+			checkCmd.Dir = "/home/ubuntu/meda"
+		} else {
+			checkCmd = exec.Command(config.MedaBinary, "images")
+		}
+	}
+
+	output, err := checkCmd.CombinedOutput()
+	imageExists := err == nil && strings.Contains(string(output), config.BaseImage)
+
+	if !imageExists {
+		ui.Say(fmt.Sprintf("Base image '%s' not found locally, pulling from registry...", config.BaseImage))
+
+		var pullCmd *exec.Cmd
+		if config.UseAPI {
+			// Use API to pull image
+			pullCmd = exec.Command("curl", "-X", "POST",
+				fmt.Sprintf("http://%s:%d/api/v1/images/pull", config.MedaHost, config.MedaPort),
+				"-H", "Content-Type: application/json",
+				"-d", fmt.Sprintf(`{
+					"image": "%s",
+					"registry": "ghcr.io",
+					"org": "cirunlabs"
+				}`, config.BaseImage))
+		} else {
+			if config.MedaBinary == "cargo" {
+				pullCmd = exec.Command("cargo", "run", "--", "pull", config.BaseImage)
+				pullCmd.Dir = "/home/ubuntu/meda"
+			} else {
+				pullCmd = exec.Command(config.MedaBinary, "pull", config.BaseImage)
+			}
+		}
+
+		// Create pipes to capture and display output
+		stdout, err := pullCmd.StdoutPipe()
+		if err != nil {
+			return multistep.ActionHalt
+		}
+		stderr, err := pullCmd.StderrPipe()
+		if err != nil {
+			return multistep.ActionHalt
+		}
+		
+		// Start the command
+		if err := pullCmd.Start(); err != nil {
+			err := fmt.Errorf("failed to start pull command: %s", err)
+			state.Put("error", err)
+			ui.Error(err.Error())
+			return multistep.ActionHalt
+		}
+		
+		// Read and display output in real-time
+		scanner := bufio.NewScanner(stdout)
+		for scanner.Scan() {
+			ui.Say(scanner.Text())
+		}
+		
+		// Also capture stderr
+		stderrScanner := bufio.NewScanner(stderr)
+		go func() {
+			for stderrScanner.Scan() {
+				ui.Say(stderrScanner.Text())
+			}
+		}()
+		
+		// Wait for command to finish
+		pullErr := pullCmd.Wait()
+		if pullErr != nil {
+			err := fmt.Errorf("failed to pull base image '%s': %s", config.BaseImage, pullErr)
+			state.Put("error", err)
+			ui.Error(err.Error())
+			return multistep.ActionHalt
+		}
+
+		ui.Say(fmt.Sprintf("Successfully pulled base image '%s'", config.BaseImage))
+	} else {
+		ui.Say(fmt.Sprintf("Base image '%s' already available locally", config.BaseImage))
+	}
+
+	return multistep.ActionContinue
+}
+
+func (s *stepPullImage) Cleanup(state multistep.StateBag) {
+	// No cleanup needed for image pull
+}
 
 // stepCreateVM creates a new VM using Meda
 type stepCreateVM struct{}
@@ -150,7 +254,32 @@ func (s *stepWaitForVM) Run(ctx context.Context, state multistep.StateBag) multi
 
 			output, err := cmd.CombinedOutput()
 			if err == nil && len(output) > 0 {
-				ip := strings.TrimSpace(string(output))
+				// Extract only the IP address from the output
+				// The output might contain cargo build information
+				lines := strings.Split(string(output), "\n")
+				var ip string
+				for _, line := range lines {
+					line = strings.TrimSpace(line)
+					// Check if this line looks like an IP address
+					if strings.Count(line, ".") == 3 && !strings.Contains(line, " ") {
+						// Basic IP validation
+						parts := strings.Split(line, ".")
+						if len(parts) == 4 {
+							valid := true
+							for _, part := range parts {
+								if _, err := strconv.Atoi(part); err != nil {
+									valid = false
+									break
+								}
+							}
+							if valid {
+								ip = line
+								break
+							}
+						}
+					}
+				}
+				
 				if ip != "" && ip != "null" {
 					state.Put("vm_ip", ip)
 					state.Put("instance_ip", ip)
@@ -321,9 +450,42 @@ func (s *stepPushImage) Run(ctx context.Context, state multistep.StateBag) multi
 		}
 	}
 
-	output, err := cmd.CombinedOutput()
+	// Create pipes to capture and display output
+	stdout, err := cmd.StdoutPipe()
 	if err != nil {
-		err := fmt.Errorf("failed to push image: %s - %s", err, string(output))
+		return multistep.ActionHalt
+	}
+	stderr, err := cmd.StderrPipe()
+	if err != nil {
+		return multistep.ActionHalt
+	}
+	
+	// Start the command
+	if err := cmd.Start(); err != nil {
+		err := fmt.Errorf("failed to start push command: %s", err)
+		state.Put("error", err)
+		ui.Error(err.Error())
+		return multistep.ActionHalt
+	}
+	
+	// Read and display output in real-time
+	scanner := bufio.NewScanner(stdout)
+	for scanner.Scan() {
+		ui.Say(scanner.Text())
+	}
+	
+	// Also capture stderr
+	stderrScanner := bufio.NewScanner(stderr)
+	go func() {
+		for stderrScanner.Scan() {
+			ui.Say(stderrScanner.Text())
+		}
+	}()
+	
+	// Wait for command to finish
+	pushErr := cmd.Wait()
+	if pushErr != nil {
+		err := fmt.Errorf("failed to push image: %s", pushErr)
 		state.Put("error", err)
 		ui.Error(err.Error())
 		return multistep.ActionHalt

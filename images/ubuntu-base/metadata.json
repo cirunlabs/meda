@@ -1,14 +1,24 @@
 {
   "name": "ubuntu-base",
-  "description": "Base Ubuntu image for Meda - minimal configuration with push support",
-  "version": "1.0.0",
+  "description": "Minimal Ubuntu image with Docker CE and Docker Compose",
+  "version": "3.0.0",
   "base_image": "ubuntu:latest",
   "features": [
-    "Minimal Ubuntu installation",
-    "GHCR/OCI registry push support",
-    "No SSH provisioning required",
-    "Fast build (~17 seconds)"
+    "Docker CE with Docker Compose",
+    "Docker Buildx plugin",
+    "Minimal footprint",
+    "Aggressive cleanup for smaller image size",
+    "GHCR/OCI registry push support"
   ],
+  "installed_tools": {
+    "container_runtime": ["docker", "docker-compose", "docker-buildx"]
+  },
+  "vm_requirements": {
+    "memory": "2G",
+    "cpus": 4,
+    "disk": "20G"
+  },
   "registry": "ghcr.io",
-  "recommended_usage": "make all"
+  "recommended_usage": "make all",
+  "build_time_estimate": "3-5 minutes"
 }

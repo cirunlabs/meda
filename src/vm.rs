@@ -42,6 +42,7 @@ pub struct VmInfo {
     pub ip: String,
     pub memory: String,
     pub disk: String,
+    pub created: String,
 }
 
 #[derive(Serialize)]
@@ -436,6 +437,22 @@ pub async fn list(config: &Config, json: bool) -> Result<()> {
             let ip = get_vm_ip(config, &name).unwrap_or_else(|_| "N/A".to_string());
             let memory = get_vm_memory(config, &name).unwrap_or_else(|_| config.mem.clone());
             let disk = get_vm_disk_size(config, &name).unwrap_or_else(|_| config.disk_size.clone());
+            
+            // Get creation time from directory metadata
+            let created = match fs::metadata(&path) {
+                Ok(metadata) => {
+                    if let Ok(created_time) = metadata.created() {
+                        if let Ok(since_epoch) = created_time.duration_since(std::time::UNIX_EPOCH) {
+                            crate::util::format_timestamp(since_epoch.as_secs())
+                        } else {
+                            "unknown".to_string()
+                        }
+                    } else {
+                        "unknown".to_string()
+                    }
+                }
+                Err(_) => "unknown".to_string(),
+            };
 
             vms.push(VmInfo {
                 name,
@@ -443,6 +460,7 @@ pub async fn list(config: &Config, json: bool) -> Result<()> {
                 ip,
                 memory,
                 disk,
+                created,
             });
         }
     }
@@ -453,14 +471,14 @@ pub async fn list(config: &Config, json: bool) -> Result<()> {
         info!("No VMs found");
     } else {
         println!(
-            "{:<15} {:<10} {:<15} {:<10} {:<10}",
-            "NAME", "STATE", "IP", "MEMORY", "DISK"
+            "{:<40} {:<10} {:<15} {:<10} {:<10} {:<20}",
+            "name", "state", "ip", "memory", "disk", "created"
         );
-        println!("{}", "-".repeat(65));
+        println!("{}", "-".repeat(115));
         for vm in vms {
             println!(
-                "{:<15} {:<10} {:<15} {:<10} {:<10}",
-                vm.name, vm.state, vm.ip, vm.memory, vm.disk
+                "{:<40} {:<10} {:<15} {:<10} {:<10} {:<20}",
+                vm.name, vm.state, vm.ip, vm.memory, vm.disk, vm.created
             );
         }
     }

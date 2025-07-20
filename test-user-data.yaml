@@ -1,0 +1,20 @@
+#cloud-config
+ssh_pwauth: true
+users:
+  - name: ubuntu
+    sudo: ALL=(ALL) NOPASSWD:ALL
+    shell: /bin/bash
+    groups: sudo
+    passwd: $6$rounds=4096$salt$kVgBhZJWHMRHjUOl3qLHovLiDDh9HlxgCVqSeDUYy/7g.8rT4Ss1qXbsqUKHnN7EqP2RdJ5eCXw9qI2TzsNIL.
+chpasswd:
+  list: |
+    ubuntu:ubuntu
+  expire: false
+package_update: true
+packages:
+  - openssh-server
+runcmd:
+  - systemctl enable ssh
+  - systemctl start ssh
+  - sed -i 's/PasswordAuthentication no/PasswordAuthentication yes/' /etc/ssh/sshd_config
+  - systemctl restart ssh

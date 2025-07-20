@@ -64,7 +64,7 @@ func (c *Config) Prepare(raws ...interface{}) error {
 
 	// Set defaults
 	if c.MedaBinary == "" {
-		c.MedaBinary = "cargo"
+		c.MedaBinary = "meda"
 	}
 	if c.MedaHost == "" {
 		c.MedaHost = "127.0.0.1"
@@ -121,18 +121,19 @@ func (c *Config) Prepare(raws ...interface{}) error {
 		c.Comm.SSHPort = 22
 	}
 	if c.Comm.SSHUsername == "" {
-		c.Comm.SSHUsername = "ubuntu"
+		c.Comm.SSHUsername = "cirun"
 	}
 	if c.Comm.SSHTimeout == 0 {
 		c.Comm.SSHTimeout = 5 * time.Minute
 	}
 	if c.Comm.SSHPassword == "" {
-		// Set a default password for Ubuntu cloud images
-		c.Comm.SSHPassword = "ubuntu"
+		// Set a default password for Meda images
+		c.Comm.SSHPassword = "cirun"
 	}
 
-	// Disable host key checking for development
+	// SSH configuration for development
 	c.Comm.SSHHandshakeAttempts = 10
+	c.Comm.SSHDisableAgentForwarding = true
 
 	// SSH host will be set dynamically in the step
 

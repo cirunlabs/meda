@@ -8,6 +8,7 @@ require (
 	github.com/hashicorp/hcl/v2 v2.19.1
 	github.com/hashicorp/packer-plugin-sdk v0.6.2
 	github.com/zclconf/go-cty v1.13.3
+	golang.org/x/crypto v0.36.0
 )
 
 replace github.com/zclconf/go-cty => github.com/nywilken/go-cty v1.13.3
@@ -84,7 +85,6 @@ require (
 	github.com/vmihailenco/msgpack/v5 v5.3.5 // indirect
 	github.com/vmihailenco/tagparser/v2 v2.0.0 // indirect
 	go.opencensus.io v0.24.0 // indirect
-	golang.org/x/crypto v0.36.0 // indirect
 	golang.org/x/exp v0.0.0-20230321023759-10a507213a29 // indirect
 	golang.org/x/net v0.38.0 // indirect
 	golang.org/x/oauth2 v0.13.0 // indirect

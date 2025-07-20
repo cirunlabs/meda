@@ -5,6 +5,7 @@ use std::fs;
 use std::io::Write;
 use std::path::Path;
 use std::process::{Command, Output};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 pub fn run_command(program: &str, args: &[&str]) -> Result<()> {
     debug!("Running command: {} {}", program, args.join(" "));
@@ -176,6 +177,51 @@ pub fn check_process_running(pid: u32) -> bool {
 
 pub fn write_string_to_file(path: &Path, content: &str) -> Result<()> {
     fs::write(path, content).map_err(Error::Io)
+}
+
+/// Convert a duration to a human-readable format
+pub fn format_duration(duration: Duration) -> String {
+    let secs = duration.as_secs();
+    
+    if secs < 60 {
+        format!("{} seconds ago", secs)
+    } else if secs < 3600 {
+        let mins = secs / 60;
+        if mins == 1 {
+            "1 minute ago".to_string()
+        } else {
+            format!("{} minutes ago", mins)
+        }
+    } else if secs < 86400 {
+        let hours = secs / 3600;
+        if hours == 1 {
+            "1 hour ago".to_string()
+        } else {
+            format!("{} hours ago", hours)
+        }
+    } else {
+        let days = secs / 86400;
+        if days == 1 {
+            "1 day ago".to_string()
+        } else {
+            format!("{} days ago", days)
+        }
+    }
+}
+
+/// Convert a timestamp to a human-readable format
+pub fn format_timestamp(timestamp: u64) -> String {
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    
+    if timestamp > now {
+        "in the future".to_string()
+    } else {
+        let duration = Duration::from_secs(now - timestamp);
+        format_duration(duration)
+    }
 }
 
 #[cfg(test)]

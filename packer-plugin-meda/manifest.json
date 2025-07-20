@@ -1,0 +1,20 @@
+{
+  "builds": [
+    {
+      "name": "ubuntu-base",
+      "builder_type": "meda-vm",
+      "build_time": 1753007542,
+      "files": null,
+      "artifact_id": "ubuntu-base:latest",
+      "packer_run_uuid": "25cda16a-4dff-02a5-0da9-f486fcae6a0d",
+      "custom_data": {
+        "build_time": "2025-07-20T10:32:22Z",
+        "image_name": "ubuntu-base",
+        "image_tag": "latest",
+        "vm_ip": "\u003cno value\u003e",
+        "vm_name": "\u003cno value\u003e"
+      }
+    }
+  ],
+  "last_run_uuid": "25cda16a-4dff-02a5-0da9-f486fcae6a0d"
+}
