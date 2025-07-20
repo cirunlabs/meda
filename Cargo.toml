@@ -3,7 +3,7 @@ name = "meda"
 version = "0.1.0"
 edition = "2021"
 description = "Cloud-Hypervisor micro-VM manager"
-authors = ["Your Name <your.email@example.com>"]
+authors = ["Amit Kumar <amit@cirun.io>"]
 
 [dependencies]
 clap = { version = "4.4", features = ["derive"] }
