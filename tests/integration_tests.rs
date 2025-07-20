@@ -380,7 +380,7 @@ fn test_cli_run_nonexistent_image() {
 
     cmd.assert()
         .failure()
-        .stderr(predicate::str::contains("not found locally"));
+        .stderr(predicate::str::contains("ORAS pull failed"));
 
     cleanup_test_env();
 }
