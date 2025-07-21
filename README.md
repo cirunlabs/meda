@@ -28,10 +28,33 @@ Meda is a wrapper around Cloud-Hypervisor that provides CLI and REST API managem
 
 ## Quick Start
 
-```bash
-# Install Meda
-cargo install --path .
+### 🚀 One-Command Install
 
+```bash
+curl -fsSL https://raw.githubusercontent.com/cirunlabs/meda/main/scripts/install-release.sh | bash
+```
+
+Or with wget:
+```bash
+wget -qO- https://raw.githubusercontent.com/cirunlabs/meda/main/scripts/install-release.sh | bash
+```
+
+### 🔧 Alternative Installations
+
+```bash
+# Install specific version
+curl -fsSL https://raw.githubusercontent.com/cirunlabs/meda/main/scripts/install-release.sh | bash -s -- --version v0.2.0
+
+# Install to custom directory
+curl -fsSL https://raw.githubusercontent.com/cirunlabs/meda/main/scripts/install-release.sh | bash -s -- --install-dir /usr/local/bin
+
+# Build from source
+git clone https://github.com/cirunlabs/meda.git && cd meda && cargo install --path .
+```
+
+### 🏁 Create Your First VM
+
+```bash
 # Create and start your first VM
 meda create my-vm --memory 2G --cpus 4
 meda start my-vm
