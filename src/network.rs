@@ -162,7 +162,7 @@ pub async fn cleanup_orphaned_tap_devices(config: &Config) -> Result<Vec<String>
     for tap_name in system_taps {
         if !vm_taps.contains(&tap_name) {
             // This TAP device is orphaned, try to remove it
-            if let Ok(_) = run_command("sudo", &["ip", "link", "del", &tap_name]) {
+            if run_command("sudo", &["ip", "link", "del", &tap_name]).is_ok() {
                 cleaned_up.push(tap_name);
             }
         }

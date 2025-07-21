@@ -1,3 +1,4 @@
+use crate::chunking::ChunkingConfig;
 use crate::error::{Error, Result};
 use std::env;
 use std::path::PathBuf;
@@ -20,6 +21,7 @@ pub struct Config {
     pub cpus: usize,
     pub mem: String,
     pub disk_size: String,
+    pub chunking: ChunkingConfig,
 }
 
 impl Config {
@@ -56,6 +58,28 @@ impl Config {
         let mem = env::var("MEDA_MEM").unwrap_or_else(|_| "1024M".to_string());
         let disk_size = env::var("MEDA_DISK_SIZE").unwrap_or_else(|_| "10G".to_string());
 
+        // Initialize chunking configuration with environment variable overrides
+        let mut chunking = ChunkingConfig::default();
+
+        // Override ORAS concurrency settings from environment variables
+        if let Ok(concurrency) = env::var("MEDA_ORAS_CONCURRENCY") {
+            if let Ok(parsed) = concurrency.parse::<u32>() {
+                chunking.oras_concurrency = parsed.clamp(1, 50); // Limit between 1-50
+            }
+        }
+
+        if let Ok(push_concurrency) = env::var("MEDA_ORAS_PUSH_CONCURRENCY") {
+            if let Ok(parsed) = push_concurrency.parse::<u32>() {
+                chunking.oras_push_concurrency = Some(parsed.clamp(1, 50));
+            }
+        }
+
+        if let Ok(pull_concurrency) = env::var("MEDA_ORAS_PULL_CONCURRENCY") {
+            if let Ok(parsed) = pull_concurrency.parse::<u32>() {
+                chunking.oras_pull_concurrency = Some(parsed.clamp(1, 50));
+            }
+        }
+
         Ok(Self {
             ch_home,
             asset_dir,
@@ -73,6 +97,7 @@ impl Config {
             cpus,
             mem,
             disk_size,
+            chunking,
         })
     }
 
@@ -190,5 +215,40 @@ mod tests {
 
         env::remove_var("MEDA_ASSET_DIR");
         env::remove_var("MEDA_VM_DIR");
+    }
+
+    #[test]
+    fn test_oras_concurrency_env_vars() {
+        // Test ORAS concurrency environment variables
+        env::set_var("MEDA_ORAS_CONCURRENCY", "15");
+        env::set_var("MEDA_ORAS_PUSH_CONCURRENCY", "20");
+        env::set_var("MEDA_ORAS_PULL_CONCURRENCY", "25");
+
+        let config = Config::new().unwrap();
+
+        assert_eq!(config.chunking.oras_concurrency, 15);
+        assert_eq!(config.chunking.get_push_concurrency(), 20);
+        assert_eq!(config.chunking.get_pull_concurrency(), 25);
+
+        // Clean up
+        env::remove_var("MEDA_ORAS_CONCURRENCY");
+        env::remove_var("MEDA_ORAS_PUSH_CONCURRENCY");
+        env::remove_var("MEDA_ORAS_PULL_CONCURRENCY");
+    }
+
+    #[test]
+    fn test_oras_concurrency_bounds() {
+        // Test that concurrency values are bounded
+        env::set_var("MEDA_ORAS_CONCURRENCY", "100"); // Should be clamped to 50
+        env::set_var("MEDA_ORAS_PUSH_CONCURRENCY", "0"); // Should be clamped to 1
+
+        let config = Config::new().unwrap();
+
+        assert_eq!(config.chunking.oras_concurrency, 50); // Max bound
+        assert_eq!(config.chunking.get_push_concurrency(), 1); // Min bound
+
+        // Clean up
+        env::remove_var("MEDA_ORAS_CONCURRENCY");
+        env::remove_var("MEDA_ORAS_PUSH_CONCURRENCY");
     }
 }

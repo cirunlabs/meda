@@ -1,3 +1,4 @@
+use crate::chunking::{ChunkInfo, ChunkMetadata, FileChunker};
 use crate::config::Config;
 use crate::error::{Error, Result};
 // Note: download_file will be used when implementing actual registry pulling
@@ -268,7 +269,7 @@ pub async fn pull(
     // Get GitHub token for authentication (optional for public images)
     let github_token = env::var("GITHUB_TOKEN").ok();
 
-    // Use ORAS to pull artifacts to temp directory
+    // Use ORAS to pull artifacts to temp directory with enhanced concurrency
     let mut cmd = std::process::Command::new(&oras_path);
     cmd.args([
         "pull",
@@ -276,13 +277,19 @@ pub async fn pull(
         "--output",
         temp_dir.to_str().unwrap(),
         "--allow-path-traversal",
+        "--concurrency",
+        &config.chunking.get_pull_concurrency().to_string(),
     ]);
 
     // Set working directory to temp dir to ensure relative downloads
     cmd.current_dir(&temp_dir);
 
     if !json {
-        println!("🔽 ORAS pulling to: {}", temp_dir.display());
+        println!(
+            "🔽 ORAS pulling with {}x concurrency to: {}",
+            config.chunking.get_pull_concurrency(),
+            temp_dir.display()
+        );
     }
 
     // Add authentication if available
@@ -290,7 +297,7 @@ pub async fn pull(
         cmd.args(["--username", "token", "--password", token]);
     }
 
-    // Add progress flags
+    // Add progress and performance flags
     if !json {
         cmd.arg("--verbose");
         println!("🔄 Downloading artifacts with ORAS...");
@@ -322,10 +329,41 @@ pub async fn pull(
     // If that fails, try scanning the assets images directory as a fallback
 
     // First try temp directory where ORAS might have downloaded files
+    let mut found_artifacts = false;
     if convert_oras_artifacts_to_meda(&temp_dir, &image_dir, &image_ref, json)
         .await
-        .is_err()
+        .is_ok()
     {
+        found_artifacts = true;
+    } else {
+        // ORAS may have restored files to their original absolute paths from push time
+        // Look for temporary directories matching the push pattern in /tmp
+        if let Ok(tmp_entries) = fs::read_dir("/tmp") {
+            for entry in tmp_entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    let dir_name = path.file_name().unwrap().to_string_lossy();
+                    // Look for directories matching meda-push-chunks-* pattern
+                    if dir_name.starts_with("meda-push-chunks-") {
+                        if !json {
+                            println!("🔍 Found ORAS chunks in temp directory: {}", path.display());
+                        }
+                        if convert_oras_artifacts_to_meda(&path, &image_dir, &image_ref, json)
+                            .await
+                            .is_ok()
+                        {
+                            found_artifacts = true;
+                            // Clean up the temp directory after successful processing
+                            fs::remove_dir_all(&path).ok();
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if !found_artifacts {
         // Check if ORAS downloaded directly to the correct tag-based directory structure
         if image_dir.exists() {
             if !json {
@@ -336,6 +374,7 @@ pub async fn pull(
             }
             // The files are already in the correct location, just create a manifest
             create_manifest_from_tag_directory(&image_dir, &image_ref, json).await?;
+            found_artifacts = true;
         } else {
             // ORAS downloads to absolute paths with SHA256 digests, need to find them
             // Check both new and old directory locations for compatibility
@@ -390,6 +429,7 @@ pub async fn pull(
                 }
                 // Convert from the SHA256 directory to our tag-based directory
                 convert_oras_artifacts_to_meda(&source_dir, &image_dir, &image_ref, json).await?;
+                found_artifacts = true;
             } else {
                 // No SHA256 directory found, this shouldn't happen with ORAS downloads
                 if !json {
@@ -400,6 +440,12 @@ pub async fn pull(
                 ));
             }
         }
+    }
+
+    if !found_artifacts {
+        return Err(Error::Other(
+            "No artifacts found in any expected location".to_string(),
+        ));
     }
 
     // Clean up temp files
@@ -556,7 +602,7 @@ pub async fn push(
     Ok(())
 }
 
-/// Push image artifacts to OCI registry using ORAS
+/// Push image artifacts to OCI registry using ORAS with chunking support
 async fn push_to_oci_registry(
     config: &Config,
     source_dir: &Path,
@@ -566,7 +612,7 @@ async fn push_to_oci_registry(
     json: bool,
 ) -> Result<()> {
     if !json {
-        println!("🔧 Using ORAS to push to registry");
+        println!("🔧 Using ORAS to push to registry with chunking support");
     }
 
     // Ensure ORAS is available
@@ -578,30 +624,84 @@ async fn push_to_oci_registry(
         target_ref.registry, target_ref.org, target_ref.name, target_ref.tag
     );
 
-    if !json {
-        println!("🚀 Pushing VM artifacts to {}", image_ref_str);
+    // Initialize file chunker
+    let chunker = FileChunker::with_config(config.chunking.clone());
 
-        // Show size summary
-        let mut total_size = 0u64;
-        for (artifact_type, artifact_file) in &manifest.artifacts {
-            let artifact_path = source_dir.join(artifact_file);
-            if artifact_path.exists() {
-                let size = fs::metadata(&artifact_path)?.len();
-                total_size += size;
+    // Create temporary directory for chunks
+    let temp_dir = std::env::temp_dir().join(format!(
+        "meda-push-chunks-{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs()
+    ));
+    fs::create_dir_all(&temp_dir)?;
+
+    // Process artifacts: analyze sizes, create chunks for large files
+    let mut files_to_push = Vec::new();
+    let mut chunk_metadata = HashMap::new();
+    let mut total_size = 0u64;
+
+    if !json {
+        println!("🚀 Preparing VM artifacts for {}", image_ref_str);
+    }
+
+    for (artifact_type, artifact_file) in &manifest.artifacts {
+        let artifact_path = source_dir.join(artifact_file);
+        if artifact_path.exists() {
+            let size = fs::metadata(&artifact_path)?.len();
+            total_size += size;
+
+            if !json {
                 println!(
                     "📁 {}: {:.2} MB",
                     artifact_type,
                     size as f64 / 1024.0 / 1024.0
                 );
             }
+
+            // Check if file should be chunked
+            if chunker.should_chunk_file(&artifact_path)? {
+                if !json {
+                    println!("🔪 File {} will be chunked", artifact_file);
+                }
+
+                // Chunk the file
+                let (metadata, chunks) = chunker.chunk_file(&artifact_path, &temp_dir, json)?;
+
+                // Add chunk files to push list
+                for chunk in &chunks {
+                    let file_arg = format!(
+                        "{}:application/vnd.cirunlabs.meda.{}-chunk.v1",
+                        chunk.chunk_path.to_str().unwrap(),
+                        artifact_type.replace("_", "-")
+                    );
+                    files_to_push.push(file_arg);
+                }
+
+                // Store chunk metadata for annotations
+                chunk_metadata.insert(artifact_file.clone(), metadata);
+            } else {
+                // Add file normally (no chunking needed)
+                let file_arg = format!(
+                    "{}:application/vnd.cirunlabs.meda.{}.v1",
+                    artifact_path.to_str().unwrap(),
+                    artifact_type.replace("_", "-")
+                );
+                files_to_push.push(file_arg);
+            }
         }
+    }
+
+    if !json {
         println!(
-            "📊 Total size: {:.2} GB",
-            total_size as f64 / 1024.0 / 1024.0 / 1024.0
+            "📊 Total size: {:.2} GB ({} files/chunks to upload)",
+            total_size as f64 / 1024.0 / 1024.0 / 1024.0,
+            files_to_push.len()
         );
     }
 
-    // Build ORAS push command with all artifacts
+    // Build ORAS push command with all artifacts, chunks, and enhanced concurrency
     let mut cmd = std::process::Command::new(&oras_path);
     cmd.args([
         "push",
@@ -611,8 +711,10 @@ async fn push_to_oci_registry(
         "--password",
         github_token,
         "--artifact-type",
-        "application/vnd.meda.vm.v1",
+        "application/vnd.cirunlabs.meda.vm.v1",
         "--disable-path-validation",
+        "--concurrency",
+        &config.chunking.get_push_concurrency().to_string(),
     ]);
 
     // Add progress and verbose flags
@@ -622,23 +724,33 @@ async fn push_to_oci_registry(
         cmd.arg("--no-tty");
     }
 
-    // Add each artifact file with custom media type and annotations
-    for (artifact_type, artifact_file) in &manifest.artifacts {
-        let artifact_path = source_dir.join(artifact_file);
-        if artifact_path.exists() {
-            // Add file with custom media type
-            let file_arg = format!(
-                "{}:application/vnd.meda.vm.{}.v1",
-                artifact_path.to_str().unwrap(),
-                artifact_type.replace("_", "-")
-            );
-            cmd.arg(&file_arg);
-        }
+    // Add all files (original + chunks)
+    for file_arg in &files_to_push {
+        cmd.arg(file_arg);
     }
 
     // Add manifest metadata as annotations
     for (key, value) in &manifest.metadata {
         cmd.args(["--annotation", &format!("meda.metadata.{}={}", key, value)]);
+    }
+
+    // Add chunking metadata as annotations
+    for filename in chunk_metadata.keys() {
+        cmd.args([
+            "--annotation",
+            &format!("org.cirunlabs.meda.original-filename={}", filename),
+        ]);
+        cmd.args([
+            "--annotation",
+            &format!(
+                "org.cirunlabs.meda.chunked-files={}",
+                chunk_metadata
+                    .keys()
+                    .map(|s| s.as_str())
+                    .collect::<Vec<_>>()
+                    .join(",")
+            ),
+        ]);
     }
 
     // Add creation timestamp
@@ -648,15 +760,30 @@ async fn push_to_oci_registry(
     ]);
     cmd.args(["--annotation", &format!("meda.name={}", manifest.name)]);
     cmd.args(["--annotation", &format!("meda.tag={}", manifest.tag)]);
+    cmd.args([
+        "--annotation",
+        &format!(
+            "org.cirunlabs.meda.upload-time={}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs()
+        ),
+    ]);
 
     if !json {
-        println!("🔄 Uploading artifacts with ORAS (this may take a while for large files)...");
+        println!(
+            "🔄 Uploading artifacts with ORAS ({}x concurrency, leveraging concurrent chunk uploads)...",
+            config.chunking.get_push_concurrency()
+        );
 
         // Use spawn to show real-time progress
         let mut child = cmd.spawn()?;
         let status = child.wait()?;
 
         if !status.success() {
+            // Clean up temp directory on failure
+            fs::remove_dir_all(&temp_dir).ok();
             return Err(Error::Other("ORAS push failed".to_string()));
         }
 
@@ -667,12 +794,17 @@ async fn push_to_oci_registry(
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
             let stdout = String::from_utf8_lossy(&output.stdout);
+            // Clean up temp directory on failure
+            fs::remove_dir_all(&temp_dir).ok();
             return Err(Error::Other(format!(
                 "ORAS push failed:\nSTDOUT: {}\nSTDERR: {}",
                 stdout, stderr
             )));
         }
     }
+
+    // Clean up temporary chunk files
+    fs::remove_dir_all(&temp_dir).ok();
 
     Ok(())
 }
@@ -686,7 +818,7 @@ async fn ensure_oras_available(config: &Config) -> Result<PathBuf> {
     Ok(config.oras_bin.clone())
 }
 
-/// Convert ORAS downloaded artifacts to Meda image format
+/// Convert ORAS downloaded artifacts to Meda image format with chunk reassembly
 async fn convert_oras_artifacts_to_meda(
     scan_dir: &Path,
     image_dir: &Path,
@@ -695,7 +827,7 @@ async fn convert_oras_artifacts_to_meda(
 ) -> Result<()> {
     if !json {
         println!(
-            "📦 Converting ORAS artifacts to Meda format from {}",
+            "📦 Converting ORAS artifacts to Meda format with chunk detection from {}",
             scan_dir.display()
         );
     }
@@ -711,15 +843,48 @@ async fn convert_oras_artifacts_to_meda(
         )));
     }
 
-    // Recursively scan directory for downloaded files (ORAS creates nested paths)
+    // Initialize file chunker for chunk detection
+    let chunker = FileChunker::new();
+
+    // First, detect all chunks in the scan directory
+    let detected_chunks = chunker.detect_chunks(scan_dir)?;
+
+    if !json && !detected_chunks.is_empty() {
+        println!("🔍 Detected {} chunked files", detected_chunks.len());
+        for (filename, (metadata, _chunks)) in &detected_chunks {
+            println!(
+                "📦 {} -> {} chunks ({:.2} MB total)",
+                filename,
+                metadata.total_chunks,
+                metadata.total_size as f64 / 1024.0 / 1024.0
+            );
+        }
+    }
+
+    // Reassemble chunked files
+    for (original_filename, (metadata, chunks)) in &detected_chunks {
+        let output_path = image_dir.join(original_filename);
+
+        if !json {
+            println!("🔧 Reassembling {}", original_filename);
+        }
+
+        chunker.reassemble_chunks(chunks, metadata, &output_path, json)?;
+
+        // Clean up chunk files after successful reassembly
+        chunker.cleanup_chunks(chunks)?;
+    }
+
+    // Scan for regular (non-chunked) files and process them
     let mut artifacts = HashMap::new();
     let mut total_size = 0u64;
 
-    fn scan_directory(
+    fn scan_directory_for_artifacts(
         dir: &Path,
         artifacts: &mut HashMap<String, String>,
         total_size: &mut u64,
         image_dir: &Path,
+        detected_chunks: &HashMap<String, (ChunkMetadata, Vec<ChunkInfo>)>,
         json: bool,
     ) -> Result<()> {
         for entry in fs::read_dir(dir)? {
@@ -728,6 +893,12 @@ async fn convert_oras_artifacts_to_meda(
 
             if path.is_file() {
                 let file_name = path.file_name().unwrap().to_string_lossy();
+
+                // Skip chunk files - they've already been processed
+                if file_name.contains(".chunk.") {
+                    continue;
+                }
+
                 let size = fs::metadata(&path)?.len();
                 *total_size += size;
 
@@ -761,7 +932,10 @@ async fn convert_oras_artifacts_to_meda(
                 let dest_path = image_dir.join(dest_file);
 
                 // Skip if we already processed this artifact type (avoid duplicates)
-                if artifacts.contains_key(artifact_type) {
+                // Also skip if this file was reassembled from chunks
+                if artifacts.contains_key(artifact_type)
+                    || detected_chunks.contains_key(&file_name.to_string())
+                {
                     continue;
                 }
 
@@ -778,13 +952,57 @@ async fn convert_oras_artifacts_to_meda(
                 }
             } else if path.is_dir() {
                 // Recursively scan subdirectories
-                scan_directory(&path, artifacts, total_size, image_dir, json)?;
+                scan_directory_for_artifacts(
+                    &path,
+                    artifacts,
+                    total_size,
+                    image_dir,
+                    detected_chunks,
+                    json,
+                )?;
             }
         }
         Ok(())
     }
 
-    scan_directory(scan_dir, &mut artifacts, &mut total_size, image_dir, json)?;
+    scan_directory_for_artifacts(
+        scan_dir,
+        &mut artifacts,
+        &mut total_size,
+        image_dir,
+        &detected_chunks,
+        json,
+    )?;
+
+    // Add reassembled files to artifacts
+    for (original_filename, (metadata, _)) in &detected_chunks {
+        let artifact_type = if original_filename.contains("base")
+            || original_filename.ends_with(".raw")
+        {
+            "base_image"
+        } else if original_filename.contains("hypervisor-fw") || original_filename.contains("fw") {
+            "firmware"
+        } else if original_filename.contains("cloud-hypervisor")
+            && !original_filename.contains("remote")
+        {
+            "hypervisor"
+        } else if original_filename.contains("ch-remote") {
+            "ch_remote"
+        } else {
+            &original_filename.replace("-", "_").replace(".", "_")
+        };
+
+        let dest_file = match artifact_type {
+            "base_image" => "base.raw",
+            "firmware" => "hypervisor-fw",
+            "hypervisor" => "cloud-hypervisor",
+            "ch_remote" => "ch-remote",
+            _ => original_filename,
+        };
+
+        artifacts.insert(artifact_type.to_string(), dest_file.to_string());
+        total_size += metadata.total_size;
+    }
 
     // Check if we found any artifacts
     if artifacts.is_empty() {
@@ -827,6 +1045,13 @@ async fn convert_oras_artifacts_to_meda(
             .to_string(),
     );
 
+    // Add chunking metadata if any files were reassembled
+    if !detected_chunks.is_empty() {
+        let chunked_files: Vec<String> = detected_chunks.keys().cloned().collect();
+        metadata.insert("chunked_files".to_string(), chunked_files.join(","));
+        metadata.insert("reassembled_from_chunks".to_string(), "true".to_string());
+    }
+
     // Create Meda manifest
     let manifest = ImageManifest {
         name: image_ref.name.clone(),
@@ -845,16 +1070,22 @@ async fn convert_oras_artifacts_to_meda(
     manifest.save(image_dir)?;
 
     if !json {
+        let chunk_info = if detected_chunks.is_empty() {
+            String::new()
+        } else {
+            format!(" (reassembled {} chunked files)", detected_chunks.len())
+        };
         println!(
-            "✅ Converted to Meda format ({:.2} MB total)",
-            total_size as f64 / 1024.0 / 1024.0
+            "✅ Converted to Meda format ({:.2} MB total){}",
+            total_size as f64 / 1024.0 / 1024.0,
+            chunk_info
         );
     }
 
     Ok(())
 }
 
-/// Create a manifest from files already in the correct tag-based directory
+/// Create a manifest from files already in the correct tag-based directory with chunk support
 async fn create_manifest_from_tag_directory(
     image_dir: &Path,
     image_ref: &ImageRef,
@@ -862,20 +1093,61 @@ async fn create_manifest_from_tag_directory(
 ) -> Result<()> {
     if !json {
         println!(
-            "📝 Creating manifest from tag directory: {}",
+            "📝 Creating manifest from tag directory with chunk detection: {}",
             image_dir.display()
         );
+    }
+
+    // Initialize file chunker for chunk detection
+    let chunker = FileChunker::new();
+
+    // First, detect all chunks in the image directory
+    let detected_chunks = chunker.detect_chunks(image_dir)?;
+
+    if !json && !detected_chunks.is_empty() {
+        println!(
+            "🔍 Detected {} chunked files in tag directory",
+            detected_chunks.len()
+        );
+        for (filename, (metadata, _chunks)) in &detected_chunks {
+            println!(
+                "📦 {} -> {} chunks ({:.2} MB total)",
+                filename,
+                metadata.total_chunks,
+                metadata.total_size as f64 / 1024.0 / 1024.0
+            );
+        }
+    }
+
+    // Reassemble chunked files
+    for (original_filename, (metadata, chunks)) in &detected_chunks {
+        let output_path = image_dir.join(original_filename);
+
+        if !json {
+            println!("🔧 Reassembling {}", original_filename);
+        }
+
+        chunker.reassemble_chunks(chunks, metadata, &output_path, json)?;
+
+        // Clean up chunk files after successful reassembly
+        chunker.cleanup_chunks(chunks)?;
     }
 
     let mut artifacts = HashMap::new();
     let mut total_size = 0u64;
 
-    // Scan the image directory for known artifact files
+    // Scan the image directory for known artifact files (excluding chunks)
     if let Ok(entries) = fs::read_dir(image_dir) {
         for entry in entries.flatten() {
             let path = entry.path();
             if path.is_file() {
                 let file_name = path.file_name().unwrap().to_string_lossy();
+
+                // Skip chunk files - they've been processed
+                if file_name.contains(".chunk.") {
+                    continue;
+                }
+
                 let size = fs::metadata(&path)?.len();
                 total_size += size;
 
@@ -909,6 +1181,40 @@ async fn create_manifest_from_tag_directory(
         }
     }
 
+    // Add reassembled files to artifacts (they should already be present from the scan above,
+    // but we want to make sure the total_size accounts for reassembled files)
+    for (original_filename, (_metadata, _)) in &detected_chunks {
+        // The reassembled files should have already been counted in the scan above,
+        // but let's make sure the total size is correct
+        let artifact_type = if original_filename.contains("base")
+            || original_filename.ends_with(".raw")
+        {
+            "base_image"
+        } else if original_filename.contains("hypervisor-fw") || original_filename.contains("fw") {
+            "firmware"
+        } else if original_filename.contains("cloud-hypervisor")
+            && !original_filename.contains("remote")
+        {
+            "hypervisor"
+        } else if original_filename.contains("ch-remote") {
+            "ch_remote"
+        } else {
+            &original_filename.replace("-", "_").replace(".", "_")
+        };
+
+        // If the artifact wasn't found in the scan (shouldn't happen), add it
+        if !artifacts.contains_key(artifact_type) {
+            let dest_file = match artifact_type {
+                "base_image" => "base.raw",
+                "firmware" => "hypervisor-fw",
+                "hypervisor" => "cloud-hypervisor",
+                "ch_remote" => "ch-remote",
+                _ => original_filename,
+            };
+            artifacts.insert(artifact_type.to_string(), dest_file.to_string());
+        }
+    }
+
     // Create metadata
     let mut metadata = HashMap::new();
     metadata.insert("pulled_from".to_string(), image_ref.url());
@@ -920,6 +1226,13 @@ async fn create_manifest_from_tag_directory(
             .as_secs()
             .to_string(),
     );
+
+    // Add chunking metadata if any files were reassembled
+    if !detected_chunks.is_empty() {
+        let chunked_files: Vec<String> = detected_chunks.keys().cloned().collect();
+        metadata.insert("chunked_files".to_string(), chunked_files.join(","));
+        metadata.insert("reassembled_from_chunks".to_string(), "true".to_string());
+    }
 
     // Create Meda manifest
     let manifest = ImageManifest {
@@ -939,10 +1252,16 @@ async fn create_manifest_from_tag_directory(
     manifest.save(image_dir)?;
 
     if !json {
+        let chunk_info = if detected_chunks.is_empty() {
+            String::new()
+        } else {
+            format!(" (reassembled {} chunked files)", detected_chunks.len())
+        };
         println!(
-            "✅ Created manifest with {} artifacts ({:.2} MB total)",
+            "✅ Created manifest with {} artifacts ({:.2} MB total){}",
             manifest.artifacts.len(),
-            total_size as f64 / 1024.0 / 1024.0
+            total_size as f64 / 1024.0 / 1024.0,
+            chunk_info
         );
     }
 

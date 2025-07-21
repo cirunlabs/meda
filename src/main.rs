@@ -1,4 +1,5 @@
 mod api;
+mod chunking;
 mod cli;
 mod config;
 mod error;
@@ -238,17 +239,15 @@ async fn main() -> Result<()> {
 
             if cleaned_up.is_empty() {
                 info!("No orphaned TAP devices found");
+            } else if dry_run {
+                info!("Would clean up {} orphaned TAP devices:", cleaned_up.len());
+                for tap_name in cleaned_up {
+                    info!("  - {}", tap_name);
+                }
             } else {
-                if dry_run {
-                    info!("Would clean up {} orphaned TAP devices:", cleaned_up.len());
-                    for tap_name in cleaned_up {
-                        info!("  - {}", tap_name);
-                    }
-                } else {
-                    info!("Cleaned up {} orphaned TAP devices:", cleaned_up.len());
-                    for tap_name in cleaned_up {
-                        info!("  - Removed {}", tap_name);
-                    }
+                info!("Cleaned up {} orphaned TAP devices:", cleaned_up.len());
+                for tap_name in cleaned_up {
+                    info!("  - Removed {}", tap_name);
                 }
             }
         }
