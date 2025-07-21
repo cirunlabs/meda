@@ -669,11 +669,12 @@ async fn push_to_oci_registry(
                 // Chunk the file
                 let (metadata, chunks) = chunker.chunk_file(&artifact_path, &temp_dir, json)?;
 
-                // Add chunk files to push list
+                // Add chunk files to push list with relative paths
                 for chunk in &chunks {
+                    let relative_path = chunk.chunk_path.strip_prefix(&temp_dir).unwrap();
                     let file_arg = format!(
                         "{}:application/vnd.cirunlabs.meda.{}-chunk.v1",
-                        chunk.chunk_path.to_str().unwrap(),
+                        relative_path.to_str().unwrap(),
                         artifact_type.replace("_", "-")
                     );
                     files_to_push.push(file_arg);
@@ -682,10 +683,23 @@ async fn push_to_oci_registry(
                 // Store chunk metadata for annotations
                 chunk_metadata.insert(artifact_file.clone(), metadata);
             } else {
-                // Add file normally (no chunking needed)
+                // Create symlink in temp directory so it can be pushed with relative path
+                let temp_file_path = temp_dir.join(artifact_file);
+                if let Some(parent) = temp_file_path.parent() {
+                    fs::create_dir_all(parent)?;
+                }
+
+                // Remove existing symlink if any
+                if temp_file_path.exists() {
+                    fs::remove_file(&temp_file_path)?;
+                }
+
+                std::os::unix::fs::symlink(&artifact_path, &temp_file_path)?;
+
+                // Add file with relative path
                 let file_arg = format!(
                     "{}:application/vnd.cirunlabs.meda.{}.v1",
-                    artifact_path.to_str().unwrap(),
+                    artifact_file,
                     artifact_type.replace("_", "-")
                 );
                 files_to_push.push(file_arg);
@@ -716,6 +730,9 @@ async fn push_to_oci_registry(
         "--concurrency",
         &config.chunking.get_push_concurrency().to_string(),
     ]);
+
+    // Set working directory to temp_dir so all file paths are relative
+    cmd.current_dir(&temp_dir);
 
     // Add progress and verbose flags
     if !json {
