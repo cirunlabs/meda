@@ -233,6 +233,25 @@ async fn main() -> Result<()> {
 
             axum::serve(listener, app).await?;
         }
+        Commands::Cleanup { dry_run } => {
+            let cleaned_up = crate::network::cleanup_orphaned_tap_devices(&config).await?;
+
+            if cleaned_up.is_empty() {
+                info!("No orphaned TAP devices found");
+            } else {
+                if dry_run {
+                    info!("Would clean up {} orphaned TAP devices:", cleaned_up.len());
+                    for tap_name in cleaned_up {
+                        info!("  - {}", tap_name);
+                    }
+                } else {
+                    info!("Cleaned up {} orphaned TAP devices:", cleaned_up.len());
+                    for tap_name in cleaned_up {
+                        info!("  - Removed {}", tap_name);
+                    }
+                }
+            }
+        }
     }
 
     Ok(())

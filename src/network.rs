@@ -64,23 +64,10 @@ pub async fn generate_unique_subnet(config: &Config) -> Result<String> {
     ))
 }
 
-pub async fn generate_unique_tap_name(config: &Config, vm_name: &str) -> Result<String> {
-    // Get all existing TAP device names from VM directories
-    let mut used_tap_names = Vec::new();
+pub async fn generate_unique_tap_name(_config: &Config, vm_name: &str) -> Result<String> {
+    // Get all currently active TAP devices on the system (authoritative source)
+    let mut used_tap_names = std::collections::HashSet::new();
 
-    if let Ok(entries) = fs::read_dir(&config.vm_root) {
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.is_dir() {
-                let tapdev_file = path.join("tapdev");
-                if let Ok(tap_name) = fs::read_to_string(tapdev_file) {
-                    used_tap_names.push(tap_name.trim().to_string());
-                }
-            }
-        }
-    }
-
-    // Also check currently active TAP devices on the system
     if let Ok(output) = run_command_with_output("ip", &["link", "show"]) {
         if output.status.success() {
             let output_str = String::from_utf8_lossy(&output.stdout);
@@ -90,7 +77,7 @@ pub async fn generate_unique_tap_name(config: &Config, vm_name: &str) -> Result<
                         let tap_part = &line[tap_start..];
                         if let Some(colon_pos) = tap_part.find(':') {
                             let tap_name = tap_part[..colon_pos].to_string();
-                            used_tap_names.push(tap_name);
+                            used_tap_names.insert(tap_name);
                         }
                     }
                 }
@@ -98,40 +85,90 @@ pub async fn generate_unique_tap_name(config: &Config, vm_name: &str) -> Result<
         }
     }
 
-    // Start with a truncated VM name (max 10 chars for tap- prefix)
-    let base_name = if vm_name.len() > 8 {
-        &vm_name[..8]
-    } else {
-        vm_name
-    };
+    // Use a deterministic approach: hash of VM name + timestamp for uniqueness
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
 
-    // Try the base name first
-    let candidate = format!("tap-{}", base_name);
+    let mut hasher = DefaultHasher::new();
+    vm_name.hash(&mut hasher);
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
+        .hash(&mut hasher);
+
+    let hash = hasher.finish();
+
+    // Create TAP name with strict length limit (Linux max is 15 chars)
+    // Format: tap-XXXXXXXX (4 + 8 = 12 chars, well under limit)
+    let candidate = format!("tap-{:08x}", (hash % 0xFFFFFFFF) as u32);
+
+    // Double-check it's not in use (extremely unlikely with hash)
     if !used_tap_names.contains(&candidate) {
         return Ok(candidate);
     }
 
-    // If base name is taken, append numbers
-    for i in 1..=999 {
-        let candidate = format!("tap-{}-{}", base_name, i);
-        if !used_tap_names.contains(&candidate) {
-            return Ok(candidate);
-        }
-    }
-
-    // If all numeric suffixes are exhausted, use random suffix
-    let mut rng = rand::thread_rng();
-    for _ in 0..100 {
-        let random_suffix: u32 = rng.gen_range(1000..=9999);
-        let candidate = format!("tap-{}-{}", base_name, random_suffix);
-        if !used_tap_names.contains(&candidate) {
-            return Ok(candidate);
+    // Fallback: increment hash until we find unused name
+    for i in 1..=1000 {
+        let fallback = format!("tap-{:07x}{:x}", (hash % 0xFFFFFFF) as u32, i % 16);
+        if !used_tap_names.contains(&fallback) {
+            return Ok(fallback);
         }
     }
 
     Err(Error::Other(
-        "Could not generate a unique TAP device name after multiple attempts".to_string(),
+        "Could not generate a unique TAP device name after extensive attempts".to_string(),
     ))
+}
+
+/// Clean up orphaned TAP devices (TAP devices with no corresponding VM)
+pub async fn cleanup_orphaned_tap_devices(config: &Config) -> Result<Vec<String>> {
+    let mut cleaned_up = Vec::new();
+
+    // Get all TAP devices on the system
+    let mut system_taps = std::collections::HashSet::new();
+    if let Ok(output) = run_command_with_output("ip", &["link", "show"]) {
+        if output.status.success() {
+            let output_str = String::from_utf8_lossy(&output.stdout);
+            for line in output_str.lines() {
+                if line.contains("tap-") {
+                    if let Some(tap_start) = line.find("tap-") {
+                        let tap_part = &line[tap_start..];
+                        if let Some(colon_pos) = tap_part.find(':') {
+                            let tap_name = tap_part[..colon_pos].to_string();
+                            system_taps.insert(tap_name);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Get all TAP devices referenced by VMs
+    let mut vm_taps = std::collections::HashSet::new();
+    if let Ok(entries) = fs::read_dir(&config.vm_root) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                let tapdev_file = path.join("tapdev");
+                if let Ok(tap_name) = fs::read_to_string(tapdev_file) {
+                    vm_taps.insert(tap_name.trim().to_string());
+                }
+            }
+        }
+    }
+
+    // Find orphaned TAP devices (exist on system but not referenced by any VM)
+    for tap_name in system_taps {
+        if !vm_taps.contains(&tap_name) {
+            // This TAP device is orphaned, try to remove it
+            if let Ok(_) = run_command("sudo", &["ip", "link", "del", &tap_name]) {
+                cleaned_up.push(tap_name);
+            }
+        }
+    }
+
+    Ok(cleaned_up)
 }
 
 pub async fn setup_networking(

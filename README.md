@@ -1,6 +1,6 @@
 <div align="center">
   <img src="meda.png" alt="Meda" width="300"/>
-  
+
   <img src="meda-command.png" alt="Meda"/>
 
 
@@ -8,9 +8,9 @@
 
   [![Rust](https://img.shields.io/badge/rust-1.70%2B-orange.svg)](https://www.rust-lang.org)
   [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-  
+
   > ⚠️ **Alpha Software**: Meda is currently in alpha. Features and APIs may change.
-  
+
 </div>
 
 ---

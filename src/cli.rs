@@ -206,6 +206,13 @@ pub enum Commands {
         disk: Option<String>,
     },
 
+    /// Clean up orphaned TAP devices
+    Cleanup {
+        /// Show what would be cleaned up without actually doing it
+        #[arg(long)]
+        dry_run: bool,
+    },
+
     /// Start REST API server
     Serve {
         /// Port to bind to (default: 7777)
