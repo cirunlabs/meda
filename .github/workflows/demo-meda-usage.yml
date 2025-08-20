@@ -109,7 +109,7 @@ jobs:
       - name: Collect system information via SSH
         run: |
           echo "📊 Collecting system information from VM at $VM_IP..."
-          
+
           # Function to execute SSH commands with error handling
           ssh_execute() {
             local cmd="$1"
@@ -132,10 +132,10 @@ jobs:
 
           # Collect the requested system information
           ssh_execute "df -h" "Disk Usage Information"
-          ssh_execute "free -h" "Memory Usage Information"  
+          ssh_execute "free -h" "Memory Usage Information"
           ssh_execute "uname -a" "Operating System and Kernel Information"
           ssh_execute "lscpu" "CPU Information"
-          
+
           echo ""
           echo "🎉 System information collection completed!"
         timeout-minutes: 3
