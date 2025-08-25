@@ -93,6 +93,8 @@ pub async fn bootstrap(config: &Config) -> Result<()> {
             "qemu-img",
             &[
                 "resize",
+                "-f",
+                "raw",
                 config.base_raw.to_str().unwrap(),
                 &config.disk_size,
             ],
@@ -250,7 +252,13 @@ pub async fn create(
         }
         run_command(
             "qemu-img",
-            &["resize", vm_rootfs.to_str().unwrap(), &resources.disk_size],
+            &[
+                "resize",
+                "-f",
+                "raw",
+                vm_rootfs.to_str().unwrap(),
+                &resources.disk_size,
+            ],
         )?;
     }
 

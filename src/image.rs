@@ -1738,6 +1738,8 @@ pub async fn run_from_image(
                     "qemu-img",
                     &[
                         "resize",
+                        "-f",
+                        "raw",
                         vm_rootfs.to_str().unwrap(),
                         &options.resources.disk_size,
                     ],
