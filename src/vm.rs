@@ -2,7 +2,8 @@ use crate::config::Config;
 use crate::error::{Error, Result};
 use crate::network::{cleanup_networking, generate_random_mac, setup_networking};
 use crate::util::{
-    check_process_running, download_file, ensure_dependency, run_command, write_string_to_file,
+    check_process_running, download_file, ensure_dependency, generate_password_hash, run_command,
+    write_string_to_file,
 };
 use backon::{BlockingRetryable, ExponentialBuilder};
 use log::{debug, info, warn};
@@ -276,18 +277,22 @@ pub async fn create(
     if let Some(path) = user_data_path {
         fs::copy(path, vm_dir.join("user-data"))?;
     } else {
-        let default_user_data = r#"#cloud-config
+        let password_hash = generate_password_hash("meda");
+        let default_user_data = format!(
+            r#"#cloud-config
 users:
-  - name: cirun
+  - name: meda
     sudo: ALL=(ALL) NOPASSWD:ALL
-    passwd: $6$ep7LxhhmhQHf.TiY$qPJVJQCnPMnyFdmD0ymP7CH2dos0awET8JlSzDqoiK6AOQwDpx8fCLJ1C5c7nvkVJbIpQCOalC8l2BGkRzogM.
+    passwd: {}
     lock_passwd: false
     inactive: false
     groups: sudo
     shell: /bin/bash
 ssh_pwauth: true
-"#;
-        write_string_to_file(&vm_dir.join("user-data"), default_user_data)?;
+"#,
+            password_hash
+        );
+        write_string_to_file(&vm_dir.join("user-data"), &default_user_data)?;
     }
 
     // Generate MAC address

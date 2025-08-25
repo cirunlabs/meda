@@ -19,7 +19,7 @@ success=0
 ssh_execute() {
     local cmd="$1"
     echo "Executing: $cmd"
-    sshpass -p 'cirun' ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 cirun@$ip "$cmd"
+    sshpass -p 'meda' ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 meda@$ip "$cmd"
     return $?
 }
 
