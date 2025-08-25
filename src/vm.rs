@@ -277,7 +277,7 @@ pub async fn create(
     if let Some(path) = user_data_path {
         fs::copy(path, vm_dir.join("user-data"))?;
     } else {
-        let password_hash = generate_password_hash("meda");
+        let password_hash = generate_password_hash("meda")?;
         let default_user_data = format!(
             r#"#cloud-config
 users:

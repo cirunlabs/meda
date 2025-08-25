@@ -179,29 +179,10 @@ pub fn write_string_to_file(path: &Path, content: &str) -> Result<()> {
     fs::write(path, content).map_err(Error::Io)
 }
 
-pub fn generate_password_hash(password: &str) -> String {
-    use rand::{distributions::Alphanumeric, Rng};
-    use sha2::{Digest, Sha512};
-
-    // Generate a random salt (16 characters)
-    let salt: String = rand::thread_rng()
-        .sample_iter(&Alphanumeric)
-        .take(16)
-        .map(char::from)
-        .collect();
-
-    // Create SHA-512 hash with salt
-    let mut hasher = Sha512::new();
-    hasher.update(salt.as_bytes());
-    hasher.update(password.as_bytes());
-    let hash = hasher.finalize();
-
-    // Convert to base64 for the hash portion
-    use base64::{engine::general_purpose, Engine};
-    let hash_b64 = general_purpose::STANDARD.encode(hash);
-
-    // Format as SHA-512 crypt hash (compatible with /etc/shadow)
-    format!("$6${}${}", salt, hash_b64)
+pub fn generate_password_hash(password: &str) -> Result<String> {
+    // Use pwhash crate to generate SHA-512 crypt hash
+    pwhash::sha512_crypt::hash(password)
+        .map_err(|e| Error::Other(format!("Failed to generate password hash: {}", e)))
 }
 
 /// Convert a duration to a human-readable format
@@ -342,23 +323,21 @@ mod tests {
 
     #[test]
     fn test_generate_password_hash() {
-        let password = "testpass";
-        let hash1 = generate_password_hash(password);
-        let hash2 = generate_password_hash(password);
+        let hash = generate_password_hash("meda").unwrap();
 
         // Hash should start with $6$ (SHA-512 format)
-        assert!(hash1.starts_with("$6$"));
-        assert!(hash2.starts_with("$6$"));
-
-        // Different calls should generate different hashes (due to random salt)
-        assert_ne!(hash1, hash2);
+        assert!(hash.starts_with("$6$"));
 
         // Hash should have expected format: $6$salt$hash
-        let parts: Vec<&str> = hash1.split('$').collect();
+        let parts: Vec<&str> = hash.split('$').collect();
         assert_eq!(parts.len(), 4);
         assert_eq!(parts[0], "");
         assert_eq!(parts[1], "6");
         assert!(!parts[2].is_empty()); // salt
         assert!(!parts[3].is_empty()); // hash
+
+        // Hash should be different each time due to random salt
+        let hash2 = generate_password_hash("meda").unwrap();
+        assert_ne!(hash, hash2);
     }
 }

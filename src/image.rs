@@ -1796,7 +1796,7 @@ pub async fn run_from_image(
     if let Some(path) = options.user_data_path {
         fs::copy(path, vm_dir.join("user-data"))?;
     } else if !vm_dir.join("user-data").exists() {
-        let password_hash = generate_password_hash("meda");
+        let password_hash = generate_password_hash("meda")?;
         let default_user_data = format!(
             r#"#cloud-config
 users:

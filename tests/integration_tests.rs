@@ -9,23 +9,7 @@ use tempfile::TempDir;
 
 // Helper to generate password hash for tests
 fn generate_test_password_hash(password: &str) -> String {
-    use sha2::{Digest, Sha512};
-
-    // Use a fixed salt for tests to have predictable results
-    let salt = "testsalt123456";
-
-    // Create SHA-512 hash with salt
-    let mut hasher = Sha512::new();
-    hasher.update(salt.as_bytes());
-    hasher.update(password.as_bytes());
-    let hash = hasher.finalize();
-
-    // Convert to base64 for the hash portion
-    use base64::{engine::general_purpose, Engine};
-    let hash_b64 = general_purpose::STANDARD.encode(hash);
-
-    // Format as SHA-512 crypt hash (compatible with /etc/shadow)
-    format!("$6${}${}", salt, hash_b64)
+    pwhash::sha512_crypt::hash(password).unwrap()
 }
 
 // Helper to set up a clean test environment
