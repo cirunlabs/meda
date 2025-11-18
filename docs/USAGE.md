@@ -4,7 +4,53 @@ Meda is a command-line tool for managing Cloud-Hypervisor virtual machines. This
 
 ## Installation
 
-Ensure you have the necessary dependencies installed before using Meda.
+### System Requirements
+
+Meda requires the following system dependencies to be installed:
+
+#### Operating System
+- **Linux** with KVM support (x86_64 or arm64/aarch64 architecture)
+- KVM must be enabled in your system's BIOS/UEFI settings
+
+#### Required Packages
+
+Meda will check for required dependencies and prompt you to install them if missing.
+
+**For Debian/Ubuntu:**
+```bash
+sudo apt install qemu-utils genisoimage iptables
+```
+
+**For Fedora/RHEL:**
+```bash
+sudo dnf install qemu-img genisoimage iptables
+```
+
+**For Arch Linux:**
+```bash
+sudo pacman -S qemu-img cdrtools iptables
+```
+
+**Package Details:**
+- `qemu-utils`/`qemu-img` - QEMU disk image utilities (includes qemu-img)
+- `genisoimage`/`cdrtools` - Creates ISO 9660 filesystem images (used for cloud-init)
+- `iptables` - Network packet filtering and NAT (for VM networking)
+
+**Note:** Meda will NOT automatically install these packages. When a dependency is missing, you'll see an error message with installation instructions for your distribution.
+
+#### Verifying KVM Support
+
+To check if KVM is available on your system:
+
+```bash
+# Check if KVM module is loaded
+lsmod | grep kvm
+
+# Check if /dev/kvm exists
+ls -l /dev/kvm
+```
+
+If KVM is not available, you may need to enable virtualization in your BIOS/UEFI settings.
 
 ## Global Options
 
