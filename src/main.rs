@@ -12,15 +12,28 @@ use clap::Parser;
 use cli::{Cli, Commands};
 use config::Config;
 use error::Result;
-use log::info;
+use log::{error, info};
 use std::sync::Arc;
 
 #[tokio::main]
-async fn main() -> Result<()> {
-    // Initialize logger with more verbose output
-    // std::env::set_var("RUST_LOG", "info");
-    env_logger::init();
+async fn main() {
+    // Only initialize logger if RUST_LOG is set to avoid polluting stderr in tests/json mode
+    if std::env::var("RUST_LOG").is_ok() {
+        env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
+    }
 
+    if let Err(e) = run().await {
+        // Only use logger if it was initialized, otherwise use eprintln
+        if std::env::var("RUST_LOG").is_ok() {
+            error!("{}", e);
+        } else {
+            eprintln!("Error: {}", e);
+        }
+        std::process::exit(1);
+    }
+}
+
+async fn run() -> Result<()> {
     let cli = Cli::parse();
     let config = Config::new()?;
 

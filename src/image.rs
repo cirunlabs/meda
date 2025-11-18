@@ -1734,16 +1734,7 @@ pub async fn run_from_image(
                 if !json {
                     info!("Resizing disk to {}", options.resources.disk_size);
                 }
-                crate::util::run_command(
-                    "qemu-img",
-                    &[
-                        "resize",
-                        "-f",
-                        "raw",
-                        vm_rootfs.to_str().unwrap(),
-                        &options.resources.disk_size,
-                    ],
-                )?;
+                crate::util::resize_raw_disk(&vm_rootfs, &options.resources.disk_size)?;
             }
         } else {
             return Err(Error::Other(format!(
