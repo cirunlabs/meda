@@ -149,21 +149,16 @@ pub fn check_dependency(program: &str) -> Result<()> {
     }
 }
 
-pub fn install_dependency(package: &str) -> Result<()> {
-    debug!("Installing dependency: {}", package);
-
-    // Update package list
-    run_command("sudo apt-get", &["-qq", "update"])?;
-
-    // Install package
-    run_command("sudo apt-get", &["-y", "install", package])?;
-
-    Ok(())
-}
-
 pub fn ensure_dependency(program: &str, package: &str) -> Result<()> {
     if check_dependency(program).is_err() {
-        install_dependency(package)?;
+        return Err(Error::Other(format!(
+            "Required dependency '{}' not found. Please install it using your package manager.\n\
+            \n\
+            For Debian/Ubuntu: sudo apt install {}\n\
+            For Fedora/RHEL:   sudo dnf install {}\n\
+            For Arch Linux:    sudo pacman -S {}",
+            program, package, package, package
+        )));
     }
     Ok(())
 }
@@ -173,6 +168,18 @@ pub fn check_process_running(pid: u32) -> bool {
         Ok(output) => output.status.success(),
         Err(_) => false,
     }
+}
+
+/// Resize a raw disk image to the specified size
+///
+/// # Arguments
+/// * `disk_path` - Path to the raw disk image
+/// * `size` - Target size (e.g., "25G", "1024M")
+pub fn resize_raw_disk(disk_path: &Path, size: &str) -> Result<()> {
+    run_command(
+        "qemu-img",
+        &["resize", "-f", "raw", disk_path.to_str().unwrap(), size],
+    )
 }
 
 pub fn write_string_to_file(path: &Path, content: &str) -> Result<()> {
@@ -228,7 +235,7 @@ pub fn format_timestamp(timestamp: u64) -> String {
 mod tests {
     use super::*;
     use std::fs;
-    use tempfile::{NamedTempFile, TempDir};
+    use tempfile::NamedTempFile;
 
     #[test]
     fn test_run_command_success() {
@@ -291,27 +298,5 @@ mod tests {
 
         let read_content = fs::read_to_string(path).unwrap();
         assert_eq!(read_content, content);
-    }
-
-    #[tokio::test]
-    async fn test_download_file_success() {
-        let temp_dir = TempDir::new().unwrap();
-        let dest = temp_dir.path().join("test_file");
-
-        let result = download_file("https://httpbin.org/json", &dest).await;
-        assert!(result.is_ok());
-        assert!(dest.exists());
-
-        let content = fs::read_to_string(&dest).unwrap();
-        assert!(content.contains("slideshow"));
-    }
-
-    #[tokio::test]
-    async fn test_download_file_failure() {
-        let temp_dir = TempDir::new().unwrap();
-        let dest = temp_dir.path().join("test_file");
-
-        let result = download_file("https://httpbin.org/status/404", &dest).await;
-        assert!(result.is_err());
     }
 }
