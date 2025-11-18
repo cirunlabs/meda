@@ -186,6 +186,12 @@ pub fn write_string_to_file(path: &Path, content: &str) -> Result<()> {
     fs::write(path, content).map_err(Error::Io)
 }
 
+pub fn generate_password_hash(password: &str) -> Result<String> {
+    // Use pwhash crate to generate SHA-512 crypt hash
+    pwhash::sha512_crypt::hash(password)
+        .map_err(|e| Error::Other(format!("Failed to generate password hash: {}", e)))
+}
+
 /// Convert a duration to a human-readable format
 pub fn format_duration(duration: Duration) -> String {
     let secs = duration.as_secs();
@@ -298,5 +304,25 @@ mod tests {
 
         let read_content = fs::read_to_string(path).unwrap();
         assert_eq!(read_content, content);
+    }
+
+    #[test]
+    fn test_generate_password_hash() {
+        let hash = generate_password_hash("meda").unwrap();
+
+        // Hash should start with $6$ (SHA-512 format)
+        assert!(hash.starts_with("$6$"));
+
+        // Hash should have expected format: $6$salt$hash
+        let parts: Vec<&str> = hash.split('$').collect();
+        assert_eq!(parts.len(), 4);
+        assert_eq!(parts[0], "");
+        assert_eq!(parts[1], "6");
+        assert!(!parts[2].is_empty()); // salt
+        assert!(!parts[3].is_empty()); // hash
+
+        // Hash should be different each time due to random salt
+        let hash2 = generate_password_hash("meda").unwrap();
+        assert_ne!(hash, hash2);
     }
 }

@@ -1,6 +1,7 @@
 use crate::chunking::{ChunkInfo, ChunkMetadata, FileChunker};
 use crate::config::Config;
 use crate::error::{Error, Result};
+use crate::util::generate_password_hash;
 // Note: download_file will be used when implementing actual registry pulling
 use crate::vm;
 use log::info;
@@ -1788,18 +1789,22 @@ pub async fn run_from_image(
     if let Some(path) = options.user_data_path {
         fs::copy(path, vm_dir.join("user-data"))?;
     } else if !vm_dir.join("user-data").exists() {
-        let default_user_data = r#"#cloud-config
+        let password_hash = generate_password_hash("meda")?;
+        let default_user_data = format!(
+            r#"#cloud-config
 users:
-  - name: cirun
+  - name: meda
     sudo: ALL=(ALL) NOPASSWD:ALL
-    passwd: $6$ep7LxhhmhQHf.TiY$qPJVJQCnPMnyFdmD0ymP7CH2dos0awET8JlSzDqoiK6AOQwDpx8fCLJ1C5c7nvkVJbIpQCOalC8l2BGkRzogM.
+    passwd: {}
     lock_passwd: false
     inactive: false
     groups: sudo
     shell: /bin/bash
 ssh_pwauth: true
-"#;
-        crate::util::write_string_to_file(&vm_dir.join("user-data"), default_user_data)?;
+"#,
+            password_hash
+        );
+        crate::util::write_string_to_file(&vm_dir.join("user-data"), &default_user_data)?;
     }
 
     // Generate MAC address

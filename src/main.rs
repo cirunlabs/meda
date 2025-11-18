@@ -5,7 +5,7 @@ mod config;
 mod error;
 mod image;
 mod network;
-mod util;
+pub mod util;
 mod vm;
 
 use clap::Parser;

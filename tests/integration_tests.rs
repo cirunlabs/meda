@@ -7,6 +7,11 @@ use std::env;
 use std::time::Duration;
 use tempfile::TempDir;
 
+// Helper to generate password hash for tests
+fn generate_test_password_hash(password: &str) -> String {
+    pwhash::sha512_crypt::hash(password).unwrap()
+}
+
 // Helper to set up a clean test environment
 fn setup_test_env() -> TempDir {
     // Initialize env_logger for tests (only once)
@@ -862,7 +867,7 @@ fn test_ssh_connection(ip: &str) {
         "UserKnownHostsFile=/dev/null",
         "-o",
         "BatchMode=yes", // Non-interactive mode
-        &format!("cirun@{}", ip),
+        &format!("meda@{}", ip),
         "echo 'SSH connection successful'",
     ]);
 
@@ -905,7 +910,7 @@ fn test_ssh_connection_via_port(host: &str, port: u16) {
         "UserKnownHostsFile=/dev/null",
         "-o",
         "BatchMode=yes",
-        &format!("cirun@{}", host),
+        &format!("meda@{}", host),
         "echo 'SSH via port forward successful'",
     ]);
 
@@ -1032,7 +1037,7 @@ fn test_cli_vm_to_image_customization_persistence() {
                     .as_secs()
             );
             let create_file_result = run_ssh_command(ip, &format!(
-                "echo '{}' > /home/cirun/persistence-test.txt && echo 'artifact_created' > /home/cirun/test-marker.txt && ls -la /home/cirun/persistence-test.txt",
+                "echo '{}' > /home/meda/persistence-test.txt && echo 'artifact_created' > /home/meda/test-marker.txt && ls -la /home/meda/persistence-test.txt",
                 test_content
             ));
 
@@ -1041,7 +1046,7 @@ fn test_cli_vm_to_image_customization_persistence() {
 
                 // Install a test package to verify software persistence
                 let install_result = run_ssh_command(ip,
-                    "sudo apt-get update -qq && sudo apt-get install -y tree && echo 'package_installed' >> /home/cirun/test-marker.txt && which tree"
+                    "sudo apt-get update -qq && sudo apt-get install -y tree && echo 'package_installed' >> /home/meda/test-marker.txt && which tree"
                 );
 
                 if install_result {
@@ -1108,7 +1113,7 @@ fn test_cli_vm_to_image_customization_persistence() {
 
                             // Check if test file exists and has correct content
                             let file_check_result = run_ssh_command(new_ip,
-                                "cat /home/cirun/persistence-test.txt && echo '---' && cat /home/cirun/test-marker.txt"
+                                "cat /home/meda/persistence-test.txt && echo '---' && cat /home/meda/test-marker.txt"
                             );
 
                             if file_check_result {
@@ -1380,11 +1385,13 @@ fn test_cli_vm_ssh_custom_userdata() {
     let temp_dir = setup_test_env();
 
     // Create custom user-data with SSH key
-    let user_data_content = r#"#cloud-config
+    let password_hash = generate_test_password_hash("meda");
+    let user_data_content = format!(
+        r#"#cloud-config
 users:
-  - name: cirun
+  - name: meda
     sudo: ALL=(ALL) NOPASSWD:ALL
-    passwd: $6$ep7LxhhmhQHf.TiY$qPJVJQCnPMnyFdmD0ymP7CH2dos0awET8JlSzDqoiK6AOQwDpx8fCLJ1C5c7nvkVJbIpQCOalC8l2BGkRzogM.
+    passwd: {}
     lock_passwd: false
     inactive: false
     groups: sudo
@@ -1397,7 +1404,9 @@ packages:
   - htop
 runcmd:
   - echo "VM is ready for SSH" > /tmp/ready
-"#;
+"#,
+        password_hash
+    );
 
     let user_data_file = temp_dir.path().join("custom-user-data");
     std::fs::write(&user_data_file, user_data_content).unwrap();
@@ -1460,8 +1469,8 @@ fn test_ssh_with_commands(ip: &str) {
     println!("Testing SSH with commands to VM at IP: {}", ip);
 
     let test_commands = vec![
-        ("whoami", "cirun"),
-        ("pwd", "/home/cirun"),
+        ("whoami", "meda"),
+        ("pwd", "/home/meda"),
         ("cat /tmp/ready", "VM is ready for SSH"),
         ("curl --version", "curl"),
     ];
@@ -1477,7 +1486,7 @@ fn test_ssh_with_commands(ip: &str) {
             "UserKnownHostsFile=/dev/null",
             "-o",
             "BatchMode=yes",
-            &format!("cirun@{}", ip),
+            &format!("meda@{}", ip),
             command,
         ]);
 
@@ -1573,7 +1582,7 @@ fn test_complete_vm_to_image_to_vm_workflow() {
 
             // Create test file
             let create_file_result = run_ssh_command(ip,
-                "echo 'This is a test file created during VM customization for integration test' > /home/cirun/integration-test-file.txt && ls -la /home/cirun/integration-test-file.txt"
+                "echo 'This is a test file created during VM customization for integration test' > /home/meda/integration-test-file.txt && ls -la /home/meda/integration-test-file.txt"
             );
 
             if create_file_result {
@@ -1646,7 +1655,7 @@ fn test_complete_vm_to_image_to_vm_workflow() {
 
                             // Check if test file exists
                             let file_check_result = run_ssh_command(new_ip,
-                                "ls -la /home/cirun/integration-test-file.txt && cat /home/cirun/integration-test-file.txt"
+                                "ls -la /home/meda/integration-test-file.txt && cat /home/meda/integration-test-file.txt"
                             );
 
                             if file_check_result {
@@ -1739,7 +1748,7 @@ fn test_ssh_connectivity(ip: &str) -> bool {
     let mut cmd = Command::new("sshpass");
     cmd.args([
         "-p",
-        "cirun",
+        "meda",
         "ssh",
         "-o",
         "ConnectTimeout=5",
@@ -1747,7 +1756,7 @@ fn test_ssh_connectivity(ip: &str) -> bool {
         "StrictHostKeyChecking=no",
         "-o",
         "UserKnownHostsFile=/dev/null",
-        &format!("cirun@{}", ip),
+        &format!("meda@{}", ip),
         "echo 'SSH test successful'",
     ]);
 
@@ -1793,7 +1802,7 @@ fn run_ssh_command(ip: &str, command: &str) -> bool {
     let mut cmd = Command::new("sshpass");
     cmd.args([
         "-p",
-        "cirun",
+        "meda",
         "ssh",
         "-o",
         "ConnectTimeout=30",
@@ -1801,7 +1810,7 @@ fn run_ssh_command(ip: &str, command: &str) -> bool {
         "StrictHostKeyChecking=no",
         "-o",
         "UserKnownHostsFile=/dev/null",
-        &format!("cirun@{}", ip),
+        &format!("meda@{}", ip),
         command,
     ]);
 
