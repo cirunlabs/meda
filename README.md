@@ -258,6 +258,17 @@ We welcome contributions! Run quality checks before submitting:
 ./scripts/check-quality.sh --with-integration
 ```
 
+## CI/CD Integration
+
+Meda can be easily integrated into CI/CD pipelines. See our [demo GitHub Actions workflow](.github/workflows/demo-meda-usage.yml) for a complete example that:
+
+- Installs meda from the latest release
+- Sets up the required system dependencies
+- Creates and manages Ubuntu VMs
+- Demonstrates the full VM lifecycle
+
+For more details, see [docs/demo-workflow.md](docs/demo-workflow.md).
+
 ## License
 
 MIT License - see [LICENSE](LICENSE) for details.
