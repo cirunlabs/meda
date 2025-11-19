@@ -89,14 +89,7 @@ pub async fn bootstrap(config: &Config) -> Result<()> {
         )?;
 
         // Resize image
-        run_command(
-            "qemu-img",
-            &[
-                "resize",
-                config.base_raw.to_str().unwrap(),
-                &config.disk_size,
-            ],
-        )?;
+        crate::util::resize_raw_disk(&config.base_raw, &config.disk_size)?;
 
         // Remove temporary file
         fs::remove_file(&tmp_file).ok();
@@ -248,10 +241,7 @@ pub async fn create(
         if !json {
             info!("Resizing disk to {}", resources.disk_size);
         }
-        run_command(
-            "qemu-img",
-            &["resize", vm_rootfs.to_str().unwrap(), &resources.disk_size],
-        )?;
+        crate::util::resize_raw_disk(&vm_rootfs, &resources.disk_size)?;
     }
 
     // Generate network config with a unique subnet

@@ -25,6 +25,23 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
+      - name: Check disk space before cleanup
+        run: df -h
+
+      - name: Free Disk Space (Ubuntu)
+        uses: jlumbroso/free-disk-space@54081f138730dfa15788a46383842cd2f914a1be
+        with:
+          tool-cache: false
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: true
+          docker-images: true
+          swap-storage: true
+
+      - name: Check disk space after cleanup
+        run: df -h
+
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 
