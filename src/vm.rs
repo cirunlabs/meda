@@ -461,15 +461,41 @@ pub async fn list(config: &Config, json: bool) -> Result<()> {
     } else if vms.is_empty() {
         info!("No VMs found");
     } else {
+        // Calculate the maximum width needed for the name column
+        let max_name_width = vms
+            .iter()
+            .map(|vm| vm.name.len())
+            .max()
+            .unwrap_or(4) // "name" header is 4 chars
+            .max(4); // Ensure at least as wide as the header
+
+        // Print header
         println!(
-            "{:<40} {:<10} {:<15} {:<10} {:<10} {:<20}",
-            "name", "state", "ip", "memory", "disk", "created"
+            "{:<width$} {:<10} {:<15} {:<10} {:<10} {:<20}",
+            "name",
+            "state",
+            "ip",
+            "memory",
+            "disk",
+            "created",
+            width = max_name_width
         );
-        println!("{}", "-".repeat(115));
+
+        // Calculate total width for separator line
+        let total_width = max_name_width + 10 + 15 + 10 + 10 + 20 + 5; // +5 for spaces between columns
+        println!("{}", "-".repeat(total_width));
+
+        // Print VM rows
         for vm in vms {
             println!(
-                "{:<40} {:<10} {:<15} {:<10} {:<10} {:<20}",
-                vm.name, vm.state, vm.ip, vm.memory, vm.disk, vm.created
+                "{:<width$} {:<10} {:<15} {:<10} {:<10} {:<20}",
+                vm.name,
+                vm.state,
+                vm.ip,
+                vm.memory,
+                vm.disk,
+                vm.created,
+                width = max_name_width
             );
         }
     }
