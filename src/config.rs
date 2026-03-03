@@ -37,9 +37,10 @@ impl Config {
             .map(PathBuf::from)
             .unwrap_or_else(|_| ch_home.join("vms"));
 
-        let os_url =
+        let os_url = env::var("MEDA_OS_URL").unwrap_or_else(|_| {
             "https://cloud-images.ubuntu.com/jammy/current/jammy-server-cloudimg-amd64.img"
-                .to_string();
+                .to_string()
+        });
         let fw_url = "https://github.com/cloud-hypervisor/rust-hypervisor-firmware/releases/latest/download/hypervisor-fw".to_string();
         let ch_url = "https://github.com/cloud-hypervisor/cloud-hypervisor/releases/latest/download/cloud-hypervisor-static".to_string();
         let cr_url = "https://github.com/cloud-hypervisor/cloud-hypervisor/releases/latest/download/ch-remote-static".to_string();
@@ -116,10 +117,12 @@ impl Config {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serial_test::serial;
     use std::env;
     use tempfile::TempDir;
 
     #[test]
+    #[serial]
     fn test_config_new_with_defaults() {
         // Save existing env vars
         let saved_asset_dir = env::var("MEDA_ASSET_DIR").ok();
@@ -127,6 +130,7 @@ mod tests {
         let saved_cpus = env::var("MEDA_CPUS").ok();
         let saved_mem = env::var("MEDA_MEM").ok();
         let saved_disk_size = env::var("MEDA_DISK_SIZE").ok();
+        let saved_os_url = env::var("MEDA_OS_URL").ok();
 
         // Remove all env vars to test defaults
         env::remove_var("MEDA_ASSET_DIR");
@@ -134,6 +138,7 @@ mod tests {
         env::remove_var("MEDA_CPUS");
         env::remove_var("MEDA_MEM");
         env::remove_var("MEDA_DISK_SIZE");
+        env::remove_var("MEDA_OS_URL");
 
         let config = Config::new().unwrap();
 
@@ -143,6 +148,10 @@ mod tests {
         assert_eq!(config.cpus, 2);
         assert_eq!(config.mem, "1024M");
         assert_eq!(config.disk_size, "10G");
+        assert_eq!(
+            config.os_url,
+            "https://cloud-images.ubuntu.com/jammy/current/jammy-server-cloudimg-amd64.img"
+        );
 
         // Restore env vars
         if let Some(val) = saved_asset_dir {
@@ -160,9 +169,13 @@ mod tests {
         if let Some(val) = saved_disk_size {
             env::set_var("MEDA_DISK_SIZE", val);
         }
+        if let Some(val) = saved_os_url {
+            env::set_var("MEDA_OS_URL", val);
+        }
     }
 
     #[test]
+    #[serial]
     fn test_config_new_with_env_vars() {
         let temp_dir = TempDir::new().unwrap();
         let asset_dir = temp_dir.path().join("custom_assets");
@@ -187,9 +200,23 @@ mod tests {
         env::remove_var("MEDA_CPUS");
         env::remove_var("MEDA_MEM");
         env::remove_var("MEDA_DISK_SIZE");
+        env::remove_var("MEDA_OS_URL");
     }
 
     #[test]
+    #[serial]
+    fn test_config_os_url_from_env() {
+        let custom_url = "https://cloud-images.ubuntu.com/minimal/releases/noble/release/ubuntu-24.04-minimal-cloudimg-amd64.img";
+        env::set_var("MEDA_OS_URL", custom_url);
+
+        let config = Config::new().unwrap();
+        assert_eq!(config.os_url, custom_url);
+
+        env::remove_var("MEDA_OS_URL");
+    }
+
+    #[test]
+    #[serial]
     fn test_vm_dir() {
         env::remove_var("MEDA_VM_DIR");
         let config = Config::new().unwrap();
@@ -198,6 +225,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn test_ensure_dirs() {
         let temp_dir = TempDir::new().unwrap();
         let asset_dir = temp_dir.path().join("assets");
@@ -218,6 +246,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn test_oras_concurrency_env_vars() {
         // Test ORAS concurrency environment variables
         env::set_var("MEDA_ORAS_CONCURRENCY", "15");
@@ -237,6 +266,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn test_oras_concurrency_bounds() {
         // Test that concurrency values are bounded
         env::set_var("MEDA_ORAS_CONCURRENCY", "100"); // Should be clamped to 50
