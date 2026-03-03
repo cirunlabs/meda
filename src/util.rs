@@ -172,13 +172,18 @@ pub fn check_process_running(pid: u32) -> bool {
 
 /// Resize a raw disk image to the specified size
 ///
+/// Uses `--shrink` to allow both growing and shrinking the disk image.
+/// The `--shrink` flag is required by qemu-img when the target size is smaller
+/// than the current size, and is safely ignored when growing.
+/// See: https://www.qemu.org/docs/master/tools/qemu-img.html
+///
 /// # Arguments
 /// * `disk_path` - Path to the raw disk image
 /// * `size` - Target size (e.g., "25G", "1024M")
 pub fn resize_raw_disk(disk_path: &Path, size: &str) -> Result<()> {
     run_command(
         "qemu-img",
-        &["resize", "-f", "raw", disk_path.to_str().unwrap(), size],
+        &["resize", "-f", "raw", "--shrink", disk_path.to_str().unwrap(), size],
     )
 }
 
