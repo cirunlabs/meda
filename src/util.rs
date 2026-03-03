@@ -183,7 +183,14 @@ pub fn check_process_running(pid: u32) -> bool {
 pub fn resize_raw_disk(disk_path: &Path, size: &str) -> Result<()> {
     run_command(
         "qemu-img",
-        &["resize", "-f", "raw", "--shrink", disk_path.to_str().unwrap(), size],
+        &[
+            "resize",
+            "-f",
+            "raw",
+            "--shrink",
+            disk_path.to_str().unwrap(),
+            size,
+        ],
     )
 }
 
