@@ -18,8 +18,7 @@ const GPT_HEADER_SIZE: usize = 92;
 const GPT_PARTITION_ENTRY_SIZE: usize = 128;
 const GPT_SIGNATURE: u64 = 0x5452415020494645; // "EFI PART"
 const LINUX_FS_GUID: [u8; 16] = [
-    0xAF, 0x3D, 0xC6, 0x0F, 0x83, 0x84, 0x72, 0x47, 0x8E, 0x79, 0x3D, 0x69, 0xD8, 0x47, 0x7D,
-    0xE4,
+    0xAF, 0x3D, 0xC6, 0x0F, 0x83, 0x84, 0x72, 0x47, 0x8E, 0x79, 0x3D, 0x69, 0xD8, 0x47, 0x7D, 0xE4,
 ];
 
 /// CRC32 (ISO 3309 / ITU-T V.42) used by GPT.
@@ -63,7 +62,13 @@ pub fn grow_largest_partition(disk_path: &Path) -> Result<()> {
         .read(true)
         .write(true)
         .open(disk_path)
-        .map_err(|e| Error::Other(format!("Failed to open disk {}: {}", disk_path.display(), e)))?;
+        .map_err(|e| {
+            Error::Other(format!(
+                "Failed to open disk {}: {}",
+                disk_path.display(),
+                e
+            ))
+        })?;
 
     let disk_size = file
         .seek(SeekFrom::End(0))
@@ -131,7 +136,11 @@ pub fn grow_largest_partition(disk_path: &Path) -> Result<()> {
 
         debug!(
             "Partition {}: type={:02x?}, first_lba={}, last_lba={}, size={}",
-            i, &type_guid[..4], first_lba, last_lba, size
+            i,
+            &type_guid[..4],
+            first_lba,
+            last_lba,
+            size
         );
 
         if type_guid == LINUX_FS_GUID && size > best_size {
@@ -140,7 +149,8 @@ pub fn grow_largest_partition(disk_path: &Path) -> Result<()> {
         }
     }
 
-    let idx = best_idx.ok_or_else(|| Error::Other("No Linux filesystem partition found".to_string()))?;
+    let idx =
+        best_idx.ok_or_else(|| Error::Other("No Linux filesystem partition found".to_string()))?;
     let off = idx * entry_size;
     let old_last_lba = read_le_u64(&entries, off + 40);
 
@@ -201,7 +211,7 @@ pub fn grow_largest_partition(disk_path: &Path) -> Result<()> {
     write_le_u64(&mut backup_header, 24, total_sectors - 1); // my_lba
     write_le_u64(&mut backup_header, 40, 1); // alternate_lba
     write_le_u64(&mut backup_header, 48, 1); // alternate_lba for backup points to primary
-    // partition_entry_lba for backup = backup_entries_lba
+                                             // partition_entry_lba for backup = backup_entries_lba
     write_le_u64(&mut backup_header, 72, backup_entries_lba);
     // Recompute header CRC
     write_le_u32(&mut backup_header, 16, 0);
