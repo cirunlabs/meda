@@ -3,6 +3,7 @@ mod chunking;
 mod cli;
 mod config;
 mod error;
+mod gpt;
 mod image;
 mod network;
 mod ssh;

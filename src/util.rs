@@ -191,7 +191,13 @@ pub fn resize_raw_disk(disk_path: &Path, size: &str) -> Result<()> {
             disk_path.to_str().unwrap(),
             size,
         ],
-    )
+    )?;
+
+    // After resizing the raw file, grow the GPT partition table so the
+    // largest Linux partition fills the new disk size. Without this,
+    // the kernel sees the old (small) partition and the EXT4 superblock
+    // extends beyond it, causing "bad geometry" boot failures.
+    crate::gpt::grow_largest_partition(disk_path)
 }
 
 pub fn write_string_to_file(path: &Path, content: &str) -> Result<()> {
