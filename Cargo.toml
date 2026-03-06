@@ -1,6 +1,6 @@
 [package]
 name = "meda"
-version = "0.3.4"
+version = "0.3.5"
 edition = "2021"
 description = "Cloud-Hypervisor micro-VM manager"
 authors = ["Amit Kumar <amit@cirun.io>"]
