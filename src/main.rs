@@ -5,6 +5,7 @@ mod config;
 mod error;
 mod image;
 mod network;
+mod ssh;
 mod util;
 mod vm;
 

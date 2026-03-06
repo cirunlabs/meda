@@ -266,7 +266,9 @@ pub async fn create(
     if let Some(path) = user_data_path {
         fs::copy(path, vm_dir.join("user-data"))?;
     } else {
-        let default_user_data = r#"#cloud-config
+        let keypair = crate::ssh::ensure_ssh_keypair(config)?;
+        let default_user_data = format!(
+            r#"#cloud-config
 users:
   - name: cirun
     sudo: ALL=(ALL) NOPASSWD:ALL
@@ -275,9 +277,13 @@ users:
     inactive: false
     groups: sudo
     shell: /bin/bash
+    ssh_authorized_keys:
+      - {}
 ssh_pwauth: true
-"#;
-        write_string_to_file(&vm_dir.join("user-data"), default_user_data)?;
+"#,
+            keypair.public_key
+        );
+        write_string_to_file(&vm_dir.join("user-data"), &default_user_data)?;
     }
 
     // Generate MAC address

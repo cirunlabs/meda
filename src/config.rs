@@ -106,6 +106,10 @@ impl Config {
         self.vm_root.join(name)
     }
 
+    pub fn ssh_dir(&self) -> PathBuf {
+        self.ch_home.join("ssh")
+    }
+
     pub fn ensure_dirs(&self) -> Result<()> {
         std::fs::create_dir_all(&self.ch_home)?;
         std::fs::create_dir_all(&self.asset_dir)?;
