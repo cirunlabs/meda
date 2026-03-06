@@ -846,6 +846,10 @@ async fn get_vm_list(config: &crate::config::Config) -> crate::error::Result<Vec
 
             // Read stored resource information or fall back to defaults
             let vm_dir = config.vm_dir(&name);
+            let vcpus = fs::read_to_string(vm_dir.join("cpus"))
+                .unwrap_or_else(|_| config.cpus.to_string())
+                .trim()
+                .to_string();
             let memory = fs::read_to_string(vm_dir.join("memory"))
                 .unwrap_or_else(|_| config.mem.clone())
                 .trim()
@@ -876,6 +880,7 @@ async fn get_vm_list(config: &crate::config::Config) -> crate::error::Result<Vec
                 name,
                 state,
                 ip,
+                vcpus,
                 memory,
                 disk,
                 created,

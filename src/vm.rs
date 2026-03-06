@@ -40,6 +40,7 @@ pub struct VmInfo {
     pub name: String,
     pub state: String,
     pub ip: String,
+    pub vcpus: String,
     pub memory: String,
     pub disk: String,
     pub created: String,
@@ -431,6 +432,7 @@ pub async fn list(config: &Config, json: bool) -> Result<()> {
             };
 
             let ip = get_vm_ip(config, &name).unwrap_or_else(|_| "N/A".to_string());
+            let vcpus = get_vm_cpus(config, &name).unwrap_or_else(|_| config.cpus.to_string());
             let memory = get_vm_memory(config, &name).unwrap_or_else(|_| config.mem.clone());
             let disk = get_vm_disk_size(config, &name).unwrap_or_else(|_| config.disk_size.clone());
 
@@ -455,6 +457,7 @@ pub async fn list(config: &Config, json: bool) -> Result<()> {
                 name,
                 state,
                 ip,
+                vcpus,
                 memory,
                 disk,
                 created,
@@ -477,10 +480,11 @@ pub async fn list(config: &Config, json: bool) -> Result<()> {
 
         // Print header
         println!(
-            "{:<width$} {:<10} {:<15} {:<10} {:<10} {:<20}",
+            "{:<width$} {:<10} {:<15} {:<7} {:<10} {:<10} {:<20}",
             "name",
             "state",
             "ip",
+            "vcpus",
             "memory",
             "disk",
             "created",
@@ -488,16 +492,17 @@ pub async fn list(config: &Config, json: bool) -> Result<()> {
         );
 
         // Calculate total width for separator line
-        let total_width = max_name_width + 10 + 15 + 10 + 10 + 20 + 5; // +5 for spaces between columns
+        let total_width = max_name_width + 10 + 15 + 7 + 10 + 10 + 20 + 6; // +6 for spaces between columns
         println!("{}", "-".repeat(total_width));
 
         // Print VM rows
         for vm in vms {
             println!(
-                "{:<width$} {:<10} {:<15} {:<10} {:<10} {:<20}",
+                "{:<width$} {:<10} {:<15} {:<7} {:<10} {:<10} {:<20}",
                 vm.name,
                 vm.state,
                 vm.ip,
+                vm.vcpus,
                 vm.memory,
                 vm.disk,
                 vm.created,
@@ -925,6 +930,37 @@ fn get_vm_memory(config: &Config, name: &str) -> Result<String> {
     }
 
     Ok(config.mem.clone())
+}
+
+fn get_vm_cpus(config: &Config, name: &str) -> Result<String> {
+    let vm_dir = config.vm_dir(name);
+    let cpus_file = vm_dir.join("cpus");
+
+    if cpus_file.exists() {
+        return Ok(fs::read_to_string(cpus_file)?.trim().to_string());
+    }
+
+    // Fallback to extracting from start script for older VMs
+    let start_script = vm_dir.join("start.sh");
+    if !start_script.exists() {
+        return Ok(config.cpus.to_string());
+    }
+
+    let content = fs::read_to_string(start_script)?;
+
+    for line in content.lines() {
+        if line.contains("--cpus boot=") {
+            if let Some(start) = line.find("--cpus boot=") {
+                let after_flag = &line[start + 12..];
+                if let Some(end) = after_flag.find(|c: char| c == ' ' || c == '\\') {
+                    return Ok(after_flag[..end].to_string());
+                }
+                return Ok(after_flag.trim().to_string());
+            }
+        }
+    }
+
+    Ok(config.cpus.to_string())
 }
 
 fn get_vm_disk_size(config: &Config, name: &str) -> Result<String> {

@@ -39,6 +39,8 @@ pub struct VmInfo {
     pub state: String,
     /// VM IP address
     pub ip: String,
+    /// Number of vCPUs
+    pub vcpus: String,
     /// Memory allocation
     pub memory: String,
     /// Disk size
@@ -211,6 +213,7 @@ impl From<crate::vm::VmInfo> for VmInfo {
             name: vm_info.name,
             state: vm_info.state,
             ip: vm_info.ip,
+            vcpus: vm_info.vcpus,
             memory: vm_info.memory,
             disk: vm_info.disk,
             created: vm_info.created,
