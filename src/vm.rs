@@ -952,7 +952,7 @@ fn get_vm_cpus(config: &Config, name: &str) -> Result<String> {
         if line.contains("--cpus boot=") {
             if let Some(start) = line.find("--cpus boot=") {
                 let after_flag = &line[start + 12..];
-                if let Some(end) = after_flag.find(|c: char| c == ' ' || c == '\\') {
+                if let Some(end) = after_flag.find([' ', '\\']) {
                     return Ok(after_flag[..end].to_string());
                 }
                 return Ok(after_flag.trim().to_string());
