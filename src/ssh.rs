@@ -3,11 +3,9 @@ use crate::error::{Error, Result};
 use log::info;
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
-use std::path::PathBuf;
 use std::process::Command;
 
 pub struct SshKeyPair {
-    pub private_key_path: PathBuf,
     pub public_key: String,
 }
 
@@ -25,7 +23,6 @@ pub fn ensure_ssh_keypair(config: &Config) -> Result<SshKeyPair> {
             private_key_path.display()
         );
         return Ok(SshKeyPair {
-            private_key_path,
             public_key: public_key.trim().to_string(),
         });
     }
@@ -62,7 +59,6 @@ pub fn ensure_ssh_keypair(config: &Config) -> Result<SshKeyPair> {
     info!("SSH keypair generated successfully");
 
     Ok(SshKeyPair {
-        private_key_path,
         public_key: public_key.trim().to_string(),
     })
 }
@@ -88,12 +84,13 @@ mod tests {
 
         let keypair = ensure_ssh_keypair(&config).unwrap();
 
-        assert!(keypair.private_key_path.exists());
         assert!(keypair.public_key.contains("ssh-ed25519"));
         assert!(keypair.public_key.contains("meda@localhost"));
 
         // Verify permissions
-        let metadata = fs::metadata(&keypair.private_key_path).unwrap();
+        let private_key_path = config.ssh_dir().join("id_ed25519");
+        assert!(private_key_path.exists());
+        let metadata = fs::metadata(&private_key_path).unwrap();
         assert_eq!(metadata.permissions().mode() & 0o777, 0o600);
 
         let ssh_dir = config.ssh_dir();
