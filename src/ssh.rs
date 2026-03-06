@@ -20,7 +20,10 @@ pub fn ensure_ssh_keypair(config: &Config) -> Result<SshKeyPair> {
 
     if private_key_path.exists() && public_key_path.exists() {
         let public_key = fs::read_to_string(&public_key_path)?;
-        info!("Using existing SSH keypair at {}", private_key_path.display());
+        info!(
+            "Using existing SSH keypair at {}",
+            private_key_path.display()
+        );
         return Ok(SshKeyPair {
             private_key_path,
             public_key: public_key.trim().to_string(),

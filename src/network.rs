@@ -235,7 +235,9 @@ pub async fn setup_networking(
     if check_result.is_err() || !check_result.unwrap().status.success() {
         run_command(
             "sudo",
-            &["iptables", "-w", "-A", "FORWARD", "-i", tap_name, "-j", "ACCEPT"],
+            &[
+                "iptables", "-w", "-A", "FORWARD", "-i", tap_name, "-j", "ACCEPT",
+            ],
         )?;
         run_command(
             "sudo",
@@ -346,14 +348,7 @@ pub async fn cleanup_networking(config: &Config, name: &str) -> Result<()> {
         let _ = run_command(
             "sudo",
             &[
-                "iptables",
-                "-w",
-                "-D",
-                "FORWARD",
-                "-i",
-                tap_name,
-                "-j",
-                "ACCEPT",
+                "iptables", "-w", "-D", "FORWARD", "-i", tap_name, "-j", "ACCEPT",
             ],
         );
         let _ = run_command(
