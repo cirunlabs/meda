@@ -202,9 +202,9 @@ pub async fn setup_networking(
     // Enable forwarding
     run_command("sudo", &["sysctl", "-q", "net.ipv4.ip_forward=1"])?;
 
-    // Check if masquerade rule exists
+    // Check if masquerade rule exists (use -w to wait for xtables lock)
     let check_cmd = format!(
-        "sudo iptables -t nat -C POSTROUTING -s {}.0/24 -j MASQUERADE",
+        "sudo iptables -w -t nat -C POSTROUTING -s {}.0/24 -j MASQUERADE",
         subnet
     );
     let check_result = run_command_with_output("bash", &["-c", &check_cmd]);
@@ -215,6 +215,7 @@ pub async fn setup_networking(
             "sudo",
             &[
                 "iptables",
+                "-w",
                 "-t",
                 "nat",
                 "-A",
@@ -227,19 +228,22 @@ pub async fn setup_networking(
         )?;
     }
 
-    // Allow traffic from VM to leave host
-    let check_forward = format!("sudo iptables -C FORWARD -i {} -j ACCEPT", tap_name);
+    // Allow traffic from VM to leave host (use -w to wait for xtables lock)
+    let check_forward = format!("sudo iptables -w -C FORWARD -i {} -j ACCEPT", tap_name);
     let check_result = run_command_with_output("bash", &["-c", &check_forward]);
 
     if check_result.is_err() || !check_result.unwrap().status.success() {
         run_command(
             "sudo",
-            &["iptables", "-A", "FORWARD", "-i", tap_name, "-j", "ACCEPT"],
+            &[
+                "iptables", "-w", "-A", "FORWARD", "-i", tap_name, "-j", "ACCEPT",
+            ],
         )?;
         run_command(
             "sudo",
             &[
                 "iptables",
+                "-w",
                 "-A",
                 "FORWARD",
                 "-o",
@@ -282,6 +286,7 @@ pub async fn port_forward(
         "sudo",
         &[
             "iptables",
+            "-w",
             "-t",
             "nat",
             "-D",
@@ -302,6 +307,7 @@ pub async fn port_forward(
         "sudo",
         &[
             "iptables",
+            "-w",
             "-t",
             "nat",
             "-A",
@@ -334,13 +340,40 @@ pub async fn port_forward(
 pub async fn cleanup_networking(config: &Config, name: &str) -> Result<()> {
     let vm_dir = config.vm_dir(name);
 
-    // Clean up tap device
+    // Clean up iptables FORWARD rules for this VM's TAP device
     if let Ok(tap_name) = fs::read_to_string(vm_dir.join("tapdev")) {
         let tap_name = tap_name.trim();
+
+        // Remove FORWARD rules referencing this TAP device (inbound and outbound)
+        let _ = run_command(
+            "sudo",
+            &[
+                "iptables", "-w", "-D", "FORWARD", "-i", tap_name, "-j", "ACCEPT",
+            ],
+        );
+        let _ = run_command(
+            "sudo",
+            &[
+                "iptables",
+                "-w",
+                "-D",
+                "FORWARD",
+                "-o",
+                tap_name,
+                "-m",
+                "conntrack",
+                "--ctstate",
+                "RELATED,ESTABLISHED",
+                "-j",
+                "ACCEPT",
+            ],
+        );
+
+        // Clean up tap device
         let _ = run_command("sudo", &["ip", "link", "del", tap_name]);
     }
 
-    // Clean up iptables rules if this is the last VM using this subnet
+    // Clean up iptables MASQUERADE rule if this is the last VM using this subnet
     if let Ok(subnet) = fs::read_to_string(vm_dir.join("subnet")) {
         let subnet = subnet.trim();
 
@@ -364,11 +397,12 @@ pub async fn cleanup_networking(config: &Config, name: &str) -> Result<()> {
         }
 
         if !found {
-            // Remove iptables rule
+            // Remove MASQUERADE rule
             let _ = run_command(
                 "sudo",
                 &[
                     "iptables",
+                    "-w",
                     "-t",
                     "nat",
                     "-D",
