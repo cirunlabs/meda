@@ -1559,7 +1559,11 @@ pub async fn create_from_vm(
         return Err(Error::VmNotFound(vm_name.to_string()));
     }
 
-    let vm_rootfs = vm_dir.join("rootfs.raw");
+    let vm_rootfs = if vm_dir.join("rootfs.qcow2").exists() {
+        vm_dir.join("rootfs.qcow2")
+    } else {
+        vm_dir.join("rootfs.raw")
+    };
     if !vm_rootfs.exists() {
         return Err(Error::Other(format!("VM {} rootfs not found", vm_name)));
     }
@@ -1589,11 +1593,29 @@ pub async fn create_from_vm(
     let image_dir = image_ref.local_dir(config);
     fs::create_dir_all(&image_dir)?;
 
-    // Copy VM rootfs as base image
+    // Convert VM rootfs to a standalone raw base image.
+    // If the rootfs is a qcow2 overlay, this flattens it (merges backing + overlay)
+    // so the image is self-contained. For raw rootfs this is a format-preserving copy.
     let image_raw = image_dir.join("base.raw");
-    fs::copy(&vm_rootfs, &image_raw)?;
+    let input_format = if vm_rootfs.extension().and_then(|e| e.to_str()) == Some("qcow2") {
+        "qcow2"
+    } else {
+        "raw"
+    };
+    crate::util::run_command(
+        "qemu-img",
+        &[
+            "convert",
+            "-f",
+            input_format,
+            "-O",
+            "raw",
+            vm_rootfs.to_str().unwrap(),
+            image_raw.to_str().unwrap(),
+        ],
+    )?;
 
-    // Note: VM disk is copied as-is to preserve all customizations.
+    // Note: VM disk is converted to raw to preserve all customizations.
     // Machine-specific data like hostname and network config are handled
     // when creating new VMs from the image.
 
@@ -1721,21 +1743,23 @@ pub async fn run_from_image(
     // Copy base image from the cached image
     if let Some(base_image_file) = manifest.artifacts.get("base_image") {
         let source_image = image_dir.join(base_image_file);
-        let vm_rootfs = vm_dir.join("rootfs.raw");
+        let vm_rootfs = vm_dir.join("rootfs.qcow2");
 
         if source_image.exists() {
             if !json {
-                info!("📦 Copying base image to VM directory");
+                info!(
+                    "Creating qcow2 overlay (backing: {})",
+                    source_image.display()
+                );
             }
-            fs::copy(&source_image, &vm_rootfs)?;
-
-            // Resize disk if different from config default
-            if options.resources.disk_size != config.disk_size {
-                if !json {
-                    info!("Resizing disk to {}", options.resources.disk_size);
-                }
-                crate::util::resize_raw_disk(&vm_rootfs, &options.resources.disk_size)?;
-            }
+            // Only override size if user requested non-default.
+            // Otherwise inherit backing file size (matches old raw copy behavior).
+            let overlay_size = if options.resources.disk_size != config.disk_size {
+                Some(options.resources.disk_size.as_str())
+            } else {
+                None
+            };
+            crate::util::create_qcow2_overlay(&source_image, &vm_rootfs, overlay_size)?;
         } else {
             return Err(Error::Other(format!(
                 "Base image artifact '{}' not found in image",
@@ -1879,7 +1903,7 @@ cd "{}"
   --kernel "{}" \
   --cpus boot={} \
   --memory size={} \
-  --disk path={}/rootfs.raw path="{}/ci.iso" \
+  --disk path={}/rootfs.qcow2,image_type=qcow2,backing_files=on path="{}/ci.iso" \
   --net tap={},mac={} \
   --rng src=/dev/urandom \
   > "{}/ch.log" 2>&1 &
