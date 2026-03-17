@@ -200,6 +200,23 @@ pub fn resize_raw_disk(disk_path: &Path, size: &str) -> Result<()> {
     crate::gpt::grow_largest_partition(disk_path)
 }
 
+
+/// Create a qcow2 overlay image with a raw backing file.
+/// This is instant (no data copy) - the overlay stores only written blocks.
+pub fn create_qcow2_overlay(backing_file: &Path, overlay_path: &Path, size: &str) -> Result<()> {
+    run_command(
+        "qemu-img",
+        &[
+            "create",
+            "-f", "qcow2",
+            "-b", backing_file.to_str().unwrap(),
+            "-F", "raw",
+            overlay_path.to_str().unwrap(),
+            size,
+        ],
+    )
+}
+
 pub fn write_string_to_file(path: &Path, content: &str) -> Result<()> {
     fs::write(path, content).map_err(Error::Io)
 }

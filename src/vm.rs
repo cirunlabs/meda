@@ -234,16 +234,11 @@ pub async fn create(
     if !json {
         info!("Copying base image");
     }
-    let vm_rootfs = vm_dir.join("rootfs.raw");
-    fs::copy(&config.base_raw, &vm_rootfs)?;
-
-    // Resize disk if different from base
-    if resources.disk_size != config.disk_size {
-        if !json {
-            info!("Resizing disk to {}", resources.disk_size);
-        }
-        crate::util::resize_raw_disk(&vm_rootfs, &resources.disk_size)?;
+    let vm_rootfs = vm_dir.join("rootfs.qcow2");
+    if !json {
+        info!("Creating qcow2 overlay (backing: {})", config.base_raw.display());
     }
+    crate::util::create_qcow2_overlay(&config.base_raw, &vm_rootfs, &resources.disk_size)?;
 
     // Generate network config with a unique subnet
     let subnet = crate::network::generate_unique_subnet(config).await?;
@@ -354,7 +349,7 @@ cd "{}"
   --kernel "{}" \
   --cpus boot={} \
   --memory size={} \
-  --disk path={}/rootfs.raw path="{}/ci.iso" \
+  --disk path={}/rootfs.qcow2,image_type=qcow2,backing_files=on path="{}/ci.iso" \
   --net tap={},mac={} \
   --rng src=/dev/urandom \
   > "{}/ch.log" 2>&1 &
@@ -965,7 +960,11 @@ fn get_vm_cpus(config: &Config, name: &str) -> Result<String> {
 
 fn get_vm_disk_size(config: &Config, name: &str) -> Result<String> {
     let vm_dir = config.vm_dir(name);
-    let rootfs_path = vm_dir.join("rootfs.raw");
+    let rootfs_path = if vm_dir.join("rootfs.qcow2").exists() {
+        vm_dir.join("rootfs.qcow2")
+    } else {
+        vm_dir.join("rootfs.raw")
+    };
 
     if !rootfs_path.exists() {
         return Ok(config.disk_size.clone());
