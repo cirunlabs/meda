@@ -975,7 +975,7 @@ fn get_vm_disk_size(config: &Config, name: &str) -> Result<String> {
 
     // Get actual disk size using qemu-img info
     let output = std::process::Command::new("qemu-img")
-        .args(["info", "--output=json", rootfs_path.to_str().unwrap()])
+        .args(["info", "-U", "--output=json", rootfs_path.to_str().unwrap()])
         .output();
 
     match output {
