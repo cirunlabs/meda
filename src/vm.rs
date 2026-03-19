@@ -18,6 +18,7 @@ pub struct VmResources {
     pub memory: String,
     pub cpus: u8,
     pub disk_size: String,
+    pub devices: Vec<String>,
 }
 
 impl VmResources {
@@ -26,13 +27,34 @@ impl VmResources {
         memory: Option<&str>,
         cpus: Option<u8>,
         disk_size: Option<&str>,
+        devices: Vec<String>,
     ) -> Self {
         Self {
             memory: memory.unwrap_or(&config.mem).to_string(),
             cpus: cpus.unwrap_or(config.cpus as u8),
             disk_size: disk_size.unwrap_or(&config.disk_size).to_string(),
+            devices,
         }
     }
+}
+
+fn validate_device_paths(devices: &[String]) -> Result<()> {
+    for device in devices {
+        if !device.starts_with("/sys/bus/pci/devices/") {
+            return Err(Error::Other(format!(
+                "VFIO device path must be under /sys/bus/pci/devices/, got: {}",
+                device
+            )));
+        }
+        let path = std::path::Path::new(device);
+        if !path.exists() {
+            return Err(Error::Other(format!(
+                "VFIO device path does not exist: {}",
+                device
+            )));
+        }
+    }
+    Ok(())
 }
 
 #[derive(Serialize)]
@@ -43,6 +65,7 @@ pub struct VmInfo {
     pub vcpus: String,
     pub memory: String,
     pub disk: String,
+    pub devices: Vec<String>,
     pub created: String,
 }
 
@@ -257,6 +280,12 @@ pub async fn create(
     write_string_to_file(&vm_dir.join("cpus"), &resources.cpus.to_string())?;
     write_string_to_file(&vm_dir.join("disk_size"), &resources.disk_size)?;
 
+    // Validate and store VFIO device configuration
+    if !resources.devices.is_empty() {
+        validate_device_paths(&resources.devices)?;
+        write_string_to_file(&vm_dir.join("devices"), &resources.devices.join("\n"))?;
+    }
+
     // Create cloud-init files
     let meta_data = format!("instance-id: {}\nlocal-hostname: {}\n", name, name);
     write_string_to_file(&vm_dir.join("meta-data"), &meta_data)?;
@@ -341,6 +370,18 @@ ethernets:
     }
     setup_networking(config, name, &tap_name, &subnet).await?;
 
+    // Build device passthrough flags
+    let device_section = if resources.devices.is_empty() {
+        String::new()
+    } else {
+        let args: Vec<String> = resources
+            .devices
+            .iter()
+            .map(|d| format!("  --device path={}", d))
+            .collect();
+        format!(" \\\n{}", args.join(" \\\n"))
+    };
+
     // Create start script
     let start_script = format!(
         r#"#!/bin/bash
@@ -354,7 +395,7 @@ cd "{}"
   --memory size={} \
   --disk path={}/rootfs.qcow2,image_type=qcow2,backing_files=on path="{}/ci.iso" \
   --net tap={},mac={} \
-  --rng src=/dev/urandom \
+  --rng src=/dev/urandom{} \
   > "{}/ch.log" 2>&1 &
 echo $! > "{}/pid"
 
@@ -375,6 +416,7 @@ fi
         vm_dir.display(),
         tap_name,
         mac,
+        device_section,
         vm_dir.display(),
         vm_dir.display(),
         vm_dir.display(),
@@ -433,6 +475,7 @@ pub async fn list(config: &Config, json: bool) -> Result<()> {
             let vcpus = get_vm_cpus(config, &name).unwrap_or_else(|_| config.cpus.to_string());
             let memory = get_vm_memory(config, &name).unwrap_or_else(|_| config.mem.clone());
             let disk = get_vm_disk_size(config, &name).unwrap_or_else(|_| config.disk_size.clone());
+            let devices = get_vm_devices(config, &name);
 
             // Get creation time from directory metadata
             let created = match fs::metadata(&path) {
@@ -458,6 +501,7 @@ pub async fn list(config: &Config, json: bool) -> Result<()> {
                 vcpus,
                 memory,
                 disk,
+                devices,
                 created,
             });
         }
@@ -478,31 +522,38 @@ pub async fn list(config: &Config, json: bool) -> Result<()> {
 
         // Print header
         println!(
-            "{:<width$} {:<10} {:<15} {:<7} {:<10} {:<10} {:<20}",
+            "{:<width$} {:<10} {:<15} {:<7} {:<10} {:<10} {:<10} {:<20}",
             "name",
             "state",
             "ip",
             "vcpus",
             "memory",
             "disk",
+            "devices",
             "created",
             width = max_name_width
         );
 
         // Calculate total width for separator line
-        let total_width = max_name_width + 10 + 15 + 7 + 10 + 10 + 20 + 6; // +6 for spaces between columns
+        let total_width = max_name_width + 10 + 15 + 7 + 10 + 10 + 10 + 20 + 7; // +7 for spaces between columns
         println!("{}", "-".repeat(total_width));
 
         // Print VM rows
         for vm in vms {
+            let devices_display = if vm.devices.is_empty() {
+                "-".to_string()
+            } else {
+                format!("{}", vm.devices.len())
+            };
             println!(
-                "{:<width$} {:<10} {:<15} {:<7} {:<10} {:<10} {:<20}",
+                "{:<width$} {:<10} {:<15} {:<7} {:<10} {:<10} {:<10} {:<20}",
                 vm.name,
                 vm.state,
                 vm.ip,
                 vm.vcpus,
                 vm.memory,
                 vm.disk,
+                devices_display,
                 vm.created,
                 width = max_name_width
             );
@@ -565,6 +616,20 @@ pub async fn get(config: &Config, name: &str, json: bool) -> Result<()> {
             get_vm_disk_size(config, name).unwrap_or_else(|_| config.disk_size.clone()),
         ),
     );
+
+    // Add VFIO device info
+    let devices = get_vm_devices(config, name);
+    if !devices.is_empty() {
+        details.insert(
+            "devices".to_string(),
+            serde_json::Value::Array(
+                devices
+                    .iter()
+                    .map(|d| serde_json::Value::String(d.clone()))
+                    .collect(),
+            ),
+        );
+    }
 
     // Add VM directory path
     details.insert(
@@ -894,6 +959,20 @@ pub fn get_vm_ip(config: &Config, name: &str) -> Result<String> {
 
     let subnet = fs::read_to_string(subnet_file)?;
     Ok(format!("{}.2", subnet.trim()))
+}
+
+fn get_vm_devices(config: &Config, name: &str) -> Vec<String> {
+    let devices_file = config.vm_dir(name).join("devices");
+    if devices_file.exists() {
+        if let Ok(content) = fs::read_to_string(devices_file) {
+            return content
+                .lines()
+                .filter(|l| !l.is_empty())
+                .map(String::from)
+                .collect();
+        }
+    }
+    Vec::new()
 }
 
 fn get_vm_memory(config: &Config, name: &str) -> Result<String> {

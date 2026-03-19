@@ -17,6 +17,9 @@ pub struct VmCreateRequest {
     pub cpus: Option<u8>,
     /// Disk size (e.g., 10G, 20G, 5120M)
     pub disk: Option<String>,
+    /// VFIO device paths for PCI passthrough
+    #[serde(default)]
+    pub devices: Vec<String>,
 }
 
 /// VM response information
@@ -45,6 +48,8 @@ pub struct VmInfo {
     pub memory: String,
     /// Disk size
     pub disk: String,
+    /// Attached VFIO devices
+    pub devices: Vec<String>,
     /// Creation time
     pub created: String,
 }
@@ -178,6 +183,9 @@ pub struct ImageRunRequest {
     pub cpus: Option<u8>,
     /// Disk size (optional)
     pub disk: Option<String>,
+    /// VFIO device paths for PCI passthrough
+    #[serde(default)]
+    pub devices: Vec<String>,
 }
 
 /// Generic API error response
@@ -216,6 +224,7 @@ impl From<crate::vm::VmInfo> for VmInfo {
             vcpus: vm_info.vcpus,
             memory: vm_info.memory,
             disk: vm_info.disk,
+            devices: vm_info.devices,
             created: vm_info.created,
         }
     }
