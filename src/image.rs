@@ -1788,6 +1788,12 @@ pub async fn run_from_image(
         }
     }
 
+    // Reap any tap devices leaked by a prior delete so we don't pick a subnet
+    // that still has a stale connected route via a linkdown orphan.
+    if let Err(e) = crate::network::cleanup_orphaned_tap_devices(config).await {
+        log::warn!("orphan tap reap before VM run failed: {}", e);
+    }
+
     // Generate network config with a unique subnet
     let subnet = crate::network::generate_unique_subnet(config).await?;
     // Generate unique TAP device name

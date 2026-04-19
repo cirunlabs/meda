@@ -266,6 +266,12 @@ pub async fn create(
     }
     crate::util::create_qcow2_overlay(&config.base_raw, &vm_rootfs, Some(&resources.disk_size))?;
 
+    // Reap any tap devices leaked by a prior delete so we don't pick a subnet
+    // that still has a stale connected route via a linkdown orphan.
+    if let Err(e) = crate::network::cleanup_orphaned_tap_devices(config).await {
+        log::warn!("orphan tap reap before VM create failed: {}", e);
+    }
+
     // Generate network config with a unique subnet
     let subnet = crate::network::generate_unique_subnet(config).await?;
     // Generate unique TAP device name
