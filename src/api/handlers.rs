@@ -113,6 +113,7 @@ pub async fn create_vm(
         request.memory.as_deref(),
         request.cpus,
         request.disk.as_deref(),
+        request.devices,
     );
 
     match vm::create(
@@ -762,6 +763,7 @@ pub async fn run_from_image(
         request.memory.as_deref(),
         request.cpus,
         request.disk.as_deref(),
+        request.devices,
     );
 
     let options = image::RunOptions {
@@ -858,6 +860,14 @@ async fn get_vm_list(config: &crate::config::Config) -> crate::error::Result<Vec
                 .unwrap_or_else(|_| config.disk_size.clone())
                 .trim()
                 .to_string();
+            let devices = fs::read_to_string(vm_dir.join("devices"))
+                .map(|c| {
+                    c.lines()
+                        .filter(|l| !l.is_empty())
+                        .map(String::from)
+                        .collect()
+                })
+                .unwrap_or_default();
 
             // Get creation time from directory metadata
             let created = match fs::metadata(&path) {
@@ -883,6 +893,7 @@ async fn get_vm_list(config: &crate::config::Config) -> crate::error::Result<Vec
                 vcpus,
                 memory,
                 disk,
+                devices,
                 created,
             });
         }

@@ -1,7 +1,6 @@
 .aider*
 /target
 **/*.rs.bk
-Cargo.lock
 dist/
 .zig-cache/
 CLAUDE.md

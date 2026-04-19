@@ -1,8 +1,9 @@
 use crate::config::Config;
 use crate::error::{Error, Result};
-use crate::util::{run_command, run_command_with_output};
-use log::{debug, info};
+use crate::util::{run_command, run_command_quietly, run_command_with_output};
+use log::{debug, info, warn};
 use rand::Rng;
+use std::collections::HashSet;
 use std::fs;
 
 pub fn generate_random_mac() -> String {
@@ -21,10 +22,55 @@ pub fn generate_random_octet() -> u8 {
     16 + rng.gen::<u8>() % 200
 }
 
-pub async fn generate_unique_subnet(config: &Config) -> Result<String> {
-    // Get all existing subnets
-    let mut used_subnets = Vec::new();
+/// Parse the kernel routing table for `192.168.X.0/24` connected routes and
+/// return the set of third-octet values already claimed by the kernel.
+///
+/// Used as a second source of truth alongside on-disk VM dirs when choosing a
+/// subnet for a new VM. A previous `cleanup_networking` that failed to run
+/// `ip link del` leaves a stale tap device plus its connected route in the
+/// kernel even though the VM dir is gone; reusing that subnet would silently
+/// route new traffic via the stale (linkdown) tap.
+///
+/// Returns an empty set if `ip` is unavailable (macOS dev machines) — the
+/// on-disk scan is still consulted by `generate_unique_subnet`.
+fn kernel_subnet_octets_in_use() -> HashSet<u8> {
+    let mut used = HashSet::new();
+    let Ok(output) = run_command_with_output("ip", &["-o", "route", "show"]) else {
+        return used;
+    };
+    if !output.status.success() {
+        return used;
+    }
+    let out = String::from_utf8_lossy(&output.stdout);
+    for line in out.lines() {
+        // Destination is the first whitespace-separated field, e.g.
+        // "192.168.26.0/24 dev tap-66c39bfa proto kernel scope link ..."
+        let Some(dest) = line.split_whitespace().next() else {
+            continue;
+        };
+        if let Some(octet) = parse_192_168_slash_24_octet(dest) {
+            used.insert(octet);
+        }
+    }
+    used
+}
 
+/// Parse a CIDR string of the form "192.168.X.0/24" and return X, or None.
+fn parse_192_168_slash_24_octet(dest: &str) -> Option<u8> {
+    let net = dest.strip_suffix("/24")?;
+    let rest = net.strip_prefix("192.168.")?;
+    let third = rest.strip_suffix(".0")?;
+    third.parse::<u8>().ok()
+}
+
+pub async fn generate_unique_subnet(config: &Config) -> Result<String> {
+    // Start with subnets the kernel still has a connected route for. This
+    // catches leaks from earlier delete attempts that failed to remove a tap
+    // device — the VM dir is gone but the route survives, and picking that
+    // subnet would break the new VM's networking.
+    let mut used_subnets: HashSet<u8> = kernel_subnet_octets_in_use();
+
+    // Union with subnets claimed by existing VM dirs on disk.
     if let Ok(entries) = fs::read_dir(&config.vm_root) {
         for entry in entries.flatten() {
             let path = entry.path();
@@ -33,11 +79,9 @@ pub async fn generate_unique_subnet(config: &Config) -> Result<String> {
                 if subnet_file.exists() {
                     if let Ok(subnet) = fs::read_to_string(subnet_file) {
                         let subnet = subnet.trim();
-                        if subnet.starts_with("192.168.") {
-                            if let Some(octet_str) = subnet.strip_prefix("192.168.") {
-                                if let Ok(octet) = octet_str.parse::<u8>() {
-                                    used_subnets.push(octet);
-                                }
+                        if let Some(octet_str) = subnet.strip_prefix("192.168.") {
+                            if let Ok(octet) = octet_str.parse::<u8>() {
+                                used_subnets.insert(octet);
                             }
                         }
                     }
@@ -46,9 +90,8 @@ pub async fn generate_unique_subnet(config: &Config) -> Result<String> {
         }
     }
 
-    // Generate a unique subnet
     let mut attempts = 0;
-    let max_attempts = 200; // Avoid infinite loop
+    let max_attempts = 200;
 
     while attempts < max_attempts {
         let octet = generate_random_octet();
@@ -58,7 +101,6 @@ pub async fn generate_unique_subnet(config: &Config) -> Result<String> {
         attempts += 1;
     }
 
-    // If we've tried too many times, return an error
     Err(Error::Other(
         "Could not generate a unique subnet after multiple attempts".to_string(),
     ))
@@ -158,13 +200,16 @@ pub async fn cleanup_orphaned_tap_devices(config: &Config) -> Result<Vec<String>
         }
     }
 
-    // Find orphaned TAP devices (exist on system but not referenced by any VM)
+    // Find orphaned TAP devices (exist on system but not referenced by any VM).
+    // Flush the connected route first so a half-failed `ip link del` cannot
+    // leave the `192.168.X.0/24` route hanging; then verify the tap is gone.
     for tap_name in system_taps {
-        if !vm_taps.contains(&tap_name) {
-            // This TAP device is orphaned, try to remove it
-            if run_command("sudo", &["ip", "link", "del", &tap_name]).is_ok() {
-                cleaned_up.push(tap_name);
-            }
+        if vm_taps.contains(&tap_name) {
+            continue;
+        }
+        let _ = run_command_quietly("sudo", &["ip", "route", "flush", "dev", &tap_name]);
+        if delete_tap_device_verified(&tap_name).is_ok() {
+            cleaned_up.push(tap_name);
         }
     }
 
@@ -337,6 +382,45 @@ pub async fn port_forward(
     Ok(())
 }
 
+/// Delete a tap device and verify it is gone from the kernel.
+///
+/// Treats "already absent" as success regardless of how `ip link del` exited,
+/// and retries once after a brief pause to tolerate a race where qemu has not
+/// yet released its tun fd.
+fn delete_tap_device_verified(tap_name: &str) -> Result<()> {
+    if run_command_quietly("sudo", &["ip", "link", "del", tap_name]).is_ok() {
+        return Ok(());
+    }
+    if !tap_exists(tap_name) {
+        return Ok(());
+    }
+
+    std::thread::sleep(std::time::Duration::from_millis(500));
+
+    if run_command_quietly("sudo", &["ip", "link", "del", tap_name]).is_ok() {
+        return Ok(());
+    }
+    if !tap_exists(tap_name) {
+        return Ok(());
+    }
+
+    warn!(
+        "cleanup_networking: tap device {} still present after delete attempts",
+        tap_name
+    );
+    Err(Error::Other(format!(
+        "failed to delete tap device {tap_name}: still present after retry"
+    )))
+}
+
+/// Report whether a tap device is currently known to the kernel.
+fn tap_exists(tap_name: &str) -> bool {
+    match run_command_with_output("ip", &["link", "show", tap_name]) {
+        Ok(output) => output.status.success(),
+        Err(_) => false,
+    }
+}
+
 pub async fn cleanup_networking(config: &Config, name: &str) -> Result<()> {
     let vm_dir = config.vm_dir(name);
 
@@ -344,7 +428,8 @@ pub async fn cleanup_networking(config: &Config, name: &str) -> Result<()> {
     if let Ok(tap_name) = fs::read_to_string(vm_dir.join("tapdev")) {
         let tap_name = tap_name.trim();
 
-        // Remove FORWARD rules referencing this TAP device (inbound and outbound)
+        // Remove FORWARD rules referencing this TAP device (inbound and outbound).
+        // Best-effort: the rule may have already been reaped by an earlier pass.
         let _ = run_command(
             "sudo",
             &[
@@ -369,8 +454,18 @@ pub async fn cleanup_networking(config: &Config, name: &str) -> Result<()> {
             ],
         );
 
-        // Clean up tap device
-        let _ = run_command("sudo", &["ip", "link", "del", tap_name]);
+        // Flush connected routes pointing at this tap before deleting the
+        // device. `ip link del` normally auto-removes them, but being explicit
+        // means a half-successful delete cannot leave a stale route behind.
+        let _ = run_command_quietly("sudo", &["ip", "route", "flush", "dev", tap_name]);
+
+        // Delete the tap device and verify it is actually gone. Previously
+        // this call was `let _ = run_command(...)`, which silently swallowed
+        // failures and let `vm::delete` continue on to `remove_dir_all(vm_dir)`
+        // — orphaning the tap + its connected route in the kernel. The next
+        // VM that generated the same subnet (disk-only check) would then
+        // route via the stale linkdown tap and fail with "No route to host".
+        delete_tap_device_verified(tap_name)?;
     }
 
     // Clean up iptables MASQUERADE rule if this is the last VM using this subnet
@@ -507,5 +602,21 @@ mod tests {
 
         let result = cleanup_networking(&config, "nonexistent-vm").await;
         assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_parse_192_168_slash_24_octet() {
+        assert_eq!(parse_192_168_slash_24_octet("192.168.26.0/24"), Some(26));
+        assert_eq!(parse_192_168_slash_24_octet("192.168.0.0/24"), Some(0));
+        assert_eq!(parse_192_168_slash_24_octet("192.168.255.0/24"), Some(255));
+
+        // Reject non-/24, non-192.168, or non-.0 destinations so we never
+        // falsely claim an octet from an unrelated route.
+        assert_eq!(parse_192_168_slash_24_octet("10.0.0.0/24"), None);
+        assert_eq!(parse_192_168_slash_24_octet("192.168.26.0/16"), None);
+        assert_eq!(parse_192_168_slash_24_octet("192.168.26.1/32"), None);
+        assert_eq!(parse_192_168_slash_24_octet("192.168.26.0"), None);
+        assert_eq!(parse_192_168_slash_24_octet("192.168.999.0/24"), None);
+        assert_eq!(parse_192_168_slash_24_octet(""), None);
     }
 }

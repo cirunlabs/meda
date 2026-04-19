@@ -50,6 +50,7 @@ async fn run() -> Result<()> {
             memory,
             cpus,
             disk,
+            device,
         } => {
             if force {
                 if !cli.json {
@@ -74,6 +75,7 @@ async fn run() -> Result<()> {
                 memory.as_deref(),
                 cpus,
                 disk.as_deref(),
+                device,
             );
             vm::create(&config, &name, user_data.as_deref(), &resources, cli.json).await?;
         }
@@ -214,12 +216,14 @@ async fn run() -> Result<()> {
             memory,
             cpus,
             disk,
+            device,
         } => {
             let resources = vm::VmResources::from_config_with_overrides(
                 &config,
                 memory.as_deref(),
                 cpus,
                 disk.as_deref(),
+                device,
             );
             let options = image::RunOptions {
                 vm_name: name.as_deref(),

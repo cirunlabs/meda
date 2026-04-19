@@ -1788,6 +1788,12 @@ pub async fn run_from_image(
         }
     }
 
+    // Reap any tap devices leaked by a prior delete so we don't pick a subnet
+    // that still has a stale connected route via a linkdown orphan.
+    if let Err(e) = crate::network::cleanup_orphaned_tap_devices(config).await {
+        log::warn!("orphan tap reap before VM run failed: {}", e);
+    }
+
     // Generate network config with a unique subnet
     let subnet = crate::network::generate_unique_subnet(config).await?;
     // Generate unique TAP device name
@@ -1801,6 +1807,14 @@ pub async fn run_from_image(
     crate::util::write_string_to_file(&vm_dir.join("memory"), &options.resources.memory)?;
     crate::util::write_string_to_file(&vm_dir.join("cpus"), &options.resources.cpus.to_string())?;
     crate::util::write_string_to_file(&vm_dir.join("disk_size"), &options.resources.disk_size)?;
+
+    // Store VFIO device configuration
+    if !options.resources.devices.is_empty() {
+        crate::util::write_string_to_file(
+            &vm_dir.join("devices"),
+            &options.resources.devices.join("\n"),
+        )?;
+    }
 
     // Create or use provided cloud-init files
     if !vm_dir.join("meta-data").exists() {
@@ -1892,6 +1906,19 @@ ethernets:
     }
     crate::network::setup_networking(config, vm_name, &tap_name, &subnet).await?;
 
+    // Build device passthrough flags
+    let device_section = if options.resources.devices.is_empty() {
+        String::new()
+    } else {
+        let args: Vec<String> = options
+            .resources
+            .devices
+            .iter()
+            .map(|d| format!("  --device path={}", d))
+            .collect();
+        format!(" \\\n{}", args.join(" \\\n"))
+    };
+
     // Create start script
     let start_script = format!(
         r#"#!/bin/bash
@@ -1905,7 +1932,7 @@ cd "{}"
   --memory size={} \
   --disk path={}/rootfs.qcow2,image_type=qcow2,backing_files=on path="{}/ci.iso" \
   --net tap={},mac={} \
-  --rng src=/dev/urandom \
+  --rng src=/dev/urandom{} \
   > "{}/ch.log" 2>&1 &
 echo $! > "{}/pid"
 
@@ -1926,6 +1953,7 @@ fi
         vm_dir.display(),
         tap_name,
         mac,
+        device_section,
         vm_dir.display(),
         vm_dir.display(),
         vm_dir.display(),

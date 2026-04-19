@@ -36,6 +36,10 @@ pub enum Commands {
         /// Disk size (e.g., 10G, 20G, 5120M)
         #[arg(long)]
         disk: Option<String>,
+
+        /// VFIO device path for PCI passthrough (repeatable, e.g., /sys/bus/pci/devices/0000:01:00.0)
+        #[arg(long)]
+        device: Vec<String>,
     },
 
     /// List all VMs
@@ -204,6 +208,10 @@ pub enum Commands {
         /// Disk size (e.g., 10G, 20G, 5120M)
         #[arg(long)]
         disk: Option<String>,
+
+        /// VFIO device path for PCI passthrough (repeatable, e.g., /sys/bus/pci/devices/0000:01:00.0)
+        #[arg(long)]
+        device: Vec<String>,
     },
 
     /// Clean up orphaned TAP devices
