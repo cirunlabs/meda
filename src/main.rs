@@ -5,7 +5,9 @@ mod config;
 mod error;
 mod gpt;
 mod image;
+mod netns;
 mod network;
+mod snapshot;
 mod ssh;
 mod util;
 mod vm;
@@ -217,6 +219,8 @@ async fn run() -> Result<()> {
             cpus,
             disk,
             device,
+            cold,
+            ssh,
         } => {
             let resources = vm::VmResources::from_config_with_overrides(
                 &config,
@@ -233,7 +237,48 @@ async fn run() -> Result<()> {
                 no_start,
                 resources,
             };
-            image::run_from_image(&config, &image, options, cli.json).await?;
+            // `run_instant` allocates a timestamped VM name when
+            // none is provided. With --ssh we need to know that
+            // name *after* run returns (to feed to `ssh`), so run
+            // the path in --json mode under the hood, parse the
+            // result, and then exec ssh.
+            if ssh {
+                let json_out = image::run_instant_capture(&config, &image, options).await?;
+                let host = json_out
+                    .get("host")
+                    .and_then(|v| v.as_str())
+                    .ok_or_else(|| error::Error::Other("no host IP in run output".into()))?;
+                let vm_name = json_out
+                    .get("vm")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("<vm>");
+                eprintln!("→ ssh cirun@{host}  (VM {vm_name}; keeps running after exit)");
+                let status = std::process::Command::new("ssh")
+                    .args([
+                        "-i",
+                        "/home/ubuntu/.meda/ssh/id_ed25519",
+                        "-o",
+                        "StrictHostKeyChecking=no",
+                        "-o",
+                        "UserKnownHostsFile=/dev/null",
+                        "-o",
+                        "ConnectTimeout=30",
+                        &format!("cirun@{host}"),
+                    ])
+                    .status();
+                match status {
+                    Ok(s) if s.success() => {}
+                    Ok(s) => std::process::exit(s.code().unwrap_or(1)),
+                    Err(e) => return Err(error::Error::Other(format!("ssh failed: {e}"))),
+                }
+            } else if cold || no_start {
+                // --cold forces the legacy cold path; --no-start doesn't
+                // make sense with the template/clone/restore flow, so
+                // fall back to the legacy code there too.
+                image::run_from_image(&config, &image, options, cli.json).await?;
+            } else {
+                image::run_instant(&config, &image, options, cli.json).await?;
+            }
         }
         Commands::Serve { port, host } => {
             info!("Starting Meda API server on {}:{}", host, port);
@@ -252,6 +297,18 @@ async fn run() -> Result<()> {
             );
 
             axum::serve(listener, app).await?;
+        }
+        Commands::Snapshot { name } => {
+            snapshot::snapshot(&config, &name, cli.json).await?;
+        }
+        Commands::Restore { name } => {
+            snapshot::restore(&config, &name, cli.json).await?;
+        }
+        Commands::Templates => {
+            snapshot::templates(&config, cli.json)?;
+        }
+        Commands::Clone { template, new_name } => {
+            snapshot::clone_template(&config, &template, &new_name, cli.json).await?;
         }
         Commands::Cleanup { dry_run } => {
             let cleaned_up = crate::network::cleanup_orphaned_tap_devices(&config).await?;

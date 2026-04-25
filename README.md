@@ -21,10 +21,12 @@ Meda is a wrapper around Cloud-Hypervisor that provides CLI and REST API managem
 
 **Features:**
 - VM lifecycle management (create, start, stop, delete)
+- Sub-second VM boot via snapshot/restore (auto-template fast path on `meda run`)
+- One-shot `meda run --ssh` to spin up a VM and drop into a shell
 - OCI image support (pull, push, run from container registries)
 - REST API with Swagger documentation
+- Per-VM Linux network namespace for concurrent isolation (50+ VMs in parallel)
 - Packer integration for automated builds
-- Network management and VM connectivity
 
 ## Quick Start
 
@@ -43,7 +45,7 @@ wget -qO- https://raw.githubusercontent.com/cirunlabs/meda/main/scripts/install-
 
 ```bash
 # Install specific version
-curl -fsSL https://raw.githubusercontent.com/cirunlabs/meda/main/scripts/install-release.sh | bash -s -- --version v0.2.0
+curl -fsSL https://raw.githubusercontent.com/cirunlabs/meda/main/scripts/install-release.sh | bash -s -- --version v0.3.5
 
 # Install to custom directory
 curl -fsSL https://raw.githubusercontent.com/cirunlabs/meda/main/scripts/install-release.sh | bash -s -- --install-dir /usr/local/bin
@@ -55,12 +57,16 @@ git clone https://github.com/cirunlabs/meda.git && cd meda && cargo install --pa
 ### 🏁 Create Your First VM
 
 ```bash
-# Create and start your first VM
+# One-shot: create a VM from an image and SSH straight in.
+# First call builds a template (~30s); every call after that is ~1.5s.
+meda run ubuntu:latest --ssh
+
+# Or run in the background and get back the routable IP
+meda run ubuntu:latest --name web-server --memory 1G
+
+# Classic two-step (cold boot ~27s)
 meda create my-vm --memory 2G --cpus 4
 meda start my-vm
-
-# Or run directly from an image
-meda run ubuntu:latest --name web-server --memory 1G
 ```
 
 ## Core Features
@@ -82,13 +88,37 @@ meda get web-server
 meda start web-server
 meda stop web-server
 meda delete web-server
+
+# Clean up orphaned TAP devices left over from killed VMs
+meda cleanup
 ```
+
+### ⚡ Snapshot & Fast Restore
+Snapshot a configured VM, then clone it to spin up new VMs in ~500ms:
+
+```bash
+# Snapshot a running, configured VM
+meda snapshot web-server
+
+# List VMs that have a snapshot (i.e. are clone-ready)
+meda templates
+
+# Clone the snapshot into a brand-new VM (fast-restore ready)
+meda clone web-server web-server-2
+
+# Or restore the original VM in-place
+meda restore web-server
+```
+
+`meda run <image>` automatically uses this path: the first call builds an
+image-specific template, every subsequent call clones+restores it in ~1.5s.
+Pass `--cold` to force the legacy cold-boot path.
 
 ### 🌐 Network Management
 Get VM connectivity information:
 
 ```bash
-# Get VM IP address
+# Get VM IP address (host-routable — works for SSH/curl from the host)
 meda ip web-server
 ```
 
@@ -110,7 +140,7 @@ meda create-image my-custom-image --from-vm configured-vm
 meda push my-custom-image ghcr.io/myorg/my-image:v1.0
 
 # Clean up unused images
-meda prune-images
+meda prune
 ```
 
 ### 🔌 REST API Server
@@ -190,7 +220,8 @@ cargo install --path .
 
 ### System Requirements
 - Linux with KVM support
-- iptables
+- iptables and iproute2 (`ip netns` — used for per-VM network isolation)
+- passwordless `sudo` (meda creates netns / TAP devices and runs cloud-hypervisor as root)
 - qemu-utils (`sudo apt install qemu-utils`)
 - genisoimage (`sudo apt install genisoimage`)
 

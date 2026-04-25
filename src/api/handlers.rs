@@ -376,8 +376,9 @@ pub async fn get_vm_ip(
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<ApiError>)> {
     match vm::ip(&state.config, &name, true).await {
         Ok(_) => {
-            // Get IP directly
-            match vm::get_vm_ip(&state.config, &name) {
+            // Get IP directly — must mirror `meda ip`'s priority chain
+            // (netns IP first) so REST clients get a host-routable IP.
+            match vm::get_routable_ip(&state.config, &name) {
                 Ok(ip) => Ok(Json(serde_json::json!({"vm": name, "ip": ip}))),
                 Err(e) => {
                     error!("Failed to get VM IP: {}", e);
@@ -844,7 +845,12 @@ async fn get_vm_list(config: &crate::config::Config) -> crate::error::Result<Vec
                 "stopped".to_string()
             };
 
-            let ip = vm::get_vm_ip(config, &name).unwrap_or_else(|_| "N/A".to_string());
+            // Use the same priority as `meda list`/`meda ip`: prefer
+            // the host-routable netns IP, fall back to the legacy baked
+            // guest IP. cirun-agent (and any other API consumer) needs
+            // an IP it can SSH to from the host — the baked guest IP
+            // is reachable only from inside the VM's netns.
+            let ip = vm::get_routable_ip(config, &name).unwrap_or_else(|_| "N/A".to_string());
 
             // Read stored resource information or fall back to defaults
             let vm_dir = config.vm_dir(&name);
@@ -918,7 +924,7 @@ async fn get_vm_details(
         "stopped".to_string()
     };
 
-    let ip = vm::get_vm_ip(config, name).ok();
+    let ip = vm::get_routable_ip(config, name).ok();
 
     // Collect additional details
     let mut details = serde_json::Map::new();

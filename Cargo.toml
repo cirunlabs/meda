@@ -48,3 +48,16 @@ tokio-test = "0.4"
 assert_cmd = "2.0"
 predicates = "3.0"
 serial_test = "3.0"
+
+# Dev profile tuned for fast iteration. Strip debug info to line tables
+# only; debuginfo is what makes the final link slow. Combined with the
+# gcc linker pin in .cargo/config.toml this drops incremental dev
+# builds from ~3 min to a couple of seconds.
+[profile.dev]
+debug = "line-tables-only"
+incremental = true
+
+# Deps are compiled once and cached — crank them to -O1 so tests run
+# noticeably faster without costing iteration time.
+[profile.dev.package."*"]
+opt-level = 1

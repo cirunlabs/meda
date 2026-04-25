@@ -208,6 +208,20 @@ pub fn create_qcow2_overlay(
     overlay_path: &Path,
     size: Option<&str>,
 ) -> Result<()> {
+    create_qcow2_overlay_with_fmt(backing_file, "raw", overlay_path, size)
+}
+
+/// Create a qcow2 overlay with an explicit backing format. Use `qcow2`
+/// when layering over an existing qcow2 (template → clone). Passing
+/// `raw` for a qcow2 backing makes qemu-img mis-interpret the backing's
+/// on-disk size as its virtual size, which is how clones ended up with
+/// ~60MB virtual size instead of inheriting the template's 10G.
+pub fn create_qcow2_overlay_with_fmt(
+    backing_file: &Path,
+    backing_fmt: &str,
+    overlay_path: &Path,
+    size: Option<&str>,
+) -> Result<()> {
     let mut args = vec![
         "create",
         "-f",
@@ -215,13 +229,17 @@ pub fn create_qcow2_overlay(
         "-b",
         backing_file.to_str().unwrap(),
         "-F",
-        "raw",
+        backing_fmt,
         overlay_path.to_str().unwrap(),
     ];
     if let Some(s) = size {
         args.push(s);
     }
-    run_command("qemu-img", &args)
+    // qemu-img prints a "Formatting ..." info line to stdout that
+    // pollutes `meda run --json` and breaks jq. Capture it quietly —
+    // we surface only a real error (stderr + non-zero exit) if the
+    // create itself fails.
+    run_command_quietly("qemu-img", &args)
 }
 
 pub fn write_string_to_file(path: &Path, content: &str) -> Result<()> {
