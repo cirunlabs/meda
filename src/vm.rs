@@ -1285,11 +1285,7 @@ mod tests {
         let vm_dir = config.vm_dir("test-vm");
         std::fs::create_dir_all(&vm_dir).unwrap();
         std::fs::write(vm_dir.join("subnet"), "192.168.100").unwrap();
-        std::fs::write(
-            vm_dir.join("netns.json"),
-            r#"{"netns_ip":"10.99.42.2"}"#,
-        )
-        .unwrap();
+        std::fs::write(vm_dir.join("netns.json"), r#"{"netns_ip":"10.99.42.2"}"#).unwrap();
 
         let ip = get_routable_ip(&config, "test-vm").unwrap();
         assert_eq!(ip, "10.99.42.2");
