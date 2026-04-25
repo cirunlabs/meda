@@ -1679,6 +1679,175 @@ pub async fn create_from_vm(
 }
 
 /// Run a VM from a local image
+/// `meda run <image>` with auto-caching snapshot → clone → restore.
+/// First call for a given image pays the full cold-boot cost and builds
+/// a template snapshot on disk; every subsequent call for the same
+/// image clones the template and restores from it in ~1.5s.
+///
+/// The template is a hidden VM dir `__tpl_<image_slug>` that the user
+/// never names. Multiple concurrent `meda run` for the same image each
+/// produce a unique clone — safe because each clone runs with smoltcp
+/// and its own host-side forward port.
+pub async fn run_instant(
+    config: &Config,
+    image: &str,
+    options: RunOptions<'_>,
+    json: bool,
+) -> Result<()> {
+    let out = run_instant_core(config, image, options).await?;
+    if json {
+        println!("{}", serde_json::to_string(&out)?);
+    } else {
+        // User-facing output — eprintln! so it shows at default log
+        // level (info! is silenced without RUST_LOG set).
+        let vm = out["vm"].as_str().unwrap_or("?");
+        let host = out["host"].as_str().unwrap_or("?");
+        eprintln!("✅ VM {vm} ready\n   ssh -i ~/.meda/ssh/id_ed25519 cirun@{host}");
+    }
+    Ok(())
+}
+
+/// Same as [`run_instant`] but returns the JSON summary instead of
+/// printing it. Used by `meda run --ssh`, which needs the IP / VM
+/// name to exec ssh but doesn't want double-printing.
+pub async fn run_instant_capture(
+    config: &Config,
+    image: &str,
+    options: RunOptions<'_>,
+) -> Result<serde_json::Value> {
+    // run_instant_json does the work and hands back the summary
+    // object; run_instant itself is a thin printer around it.
+    run_instant_core(config, image, options).await
+}
+
+async fn run_instant_core(
+    config: &Config,
+    image: &str,
+    options: RunOptions<'_>,
+) -> Result<serde_json::Value> {
+    let default_registry = options.registry.unwrap_or("ghcr.io");
+    let default_org = options.org.unwrap_or("cirunlabs");
+    let image_ref = ImageRef::parse(image, default_registry, default_org)?;
+
+    if !image_ref.local_dir(config).exists() {
+        pull(config, image, options.registry, options.org, true).await?;
+    }
+
+    let slug = image_slug(&image_ref);
+    let template_name = format!("__tpl_{}", slug);
+    let template_dir = config.vm_dir(&template_name);
+    let has_template = template_dir.join("snapshot").join("config.json").exists();
+
+    if !has_template {
+        if template_dir.exists() {
+            let _ = vm::delete(config, &template_name, true).await;
+        }
+        let user_data_path = write_default_fast_user_data(config)?;
+        let tpl_opts = RunOptions {
+            vm_name: Some(&template_name),
+            registry: options.registry,
+            org: options.org,
+            user_data_path: Some(user_data_path.to_str().unwrap()),
+            no_start: false,
+            resources: options.resources.clone(),
+        };
+        run_from_image(config, image, tpl_opts, true).await?;
+        wait_template_ssh(config, &template_name).await?;
+        crate::snapshot::snapshot(config, &template_name, true).await?;
+        vm::stop(config, &template_name, true).await?;
+    }
+
+    let instance = match options.vm_name {
+        Some(n) => n.to_string(),
+        None => format!(
+            "{}-{}",
+            slug,
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis()
+        ),
+    };
+
+    crate::snapshot::clone_template(config, &template_name, &instance, false).await?;
+    crate::snapshot::restore(config, &instance, false).await?;
+
+    let netns_spec = crate::netns::NetnsSpec::for_vm(&instance);
+    Ok(serde_json::json!({
+        "vm": instance,
+        "ssh": format!("cirun@{}", netns_spec.netns_ip),
+        "host": netns_spec.netns_ip,
+        "port": 22,
+        "netns": netns_spec.netns,
+        "template": template_name,
+    }))
+}
+
+/// Flatten an image ref into a filesystem-safe slug (reused for the
+/// hidden template VM name). Collision on two refs that differ only
+/// in separators (e.g. `a:b` vs `a.b`) is accepted — callers should
+/// pass the canonical form produced by `meda pull`.
+fn image_slug(image_ref: &ImageRef) -> String {
+    format!(
+        "{}_{}_{}_{}",
+        image_ref
+            .registry
+            .chars()
+            .map(|c| if c.is_alphanumeric() { c } else { '_' })
+            .collect::<String>(),
+        image_ref.org,
+        image_ref.name,
+        image_ref.tag,
+    )
+}
+
+/// Wait for the template VM's SSH to come up (bounded, single-shot
+/// probe per try, 120s total). Used once per image-template build.
+async fn wait_template_ssh(config: &Config, vm_name: &str) -> Result<()> {
+    use std::io::Read;
+    use std::net::{SocketAddr, TcpStream};
+    use std::time::{Duration, Instant};
+
+    let ip = vm::get_vm_ip(config, vm_name)?;
+    let addr: SocketAddr = format!("{ip}:22")
+        .parse()
+        .map_err(|e| Error::Other(format!("bad template IP {ip}: {e}")))?;
+    let deadline = Instant::now() + Duration::from_secs(120);
+    while Instant::now() < deadline {
+        if let Ok(mut s) = TcpStream::connect_timeout(&addr, Duration::from_secs(1)) {
+            s.set_read_timeout(Some(Duration::from_secs(2))).ok();
+            let mut buf = [0u8; 1];
+            if s.read(&mut buf).ok() == Some(1) {
+                return Ok(());
+            }
+        }
+        std::thread::sleep(Duration::from_millis(200));
+    }
+    Err(Error::Other(format!(
+        "template VM {vm_name} never reached SSH within 120s"
+    )))
+}
+
+/// Materialize the fast-template user-data (cloud-init mask + meda's
+/// SSH key + in-guest meda-agent for per-clone IP reconfig) under the
+/// asset dir so the packer/meda bootstrap can reference it by path
+/// without shipping a file in $CWD. The content is embedded at build
+/// time from `test_data/fast-template-user-data.yaml`; the user's SSH
+/// public key is substituted in on first use.
+fn write_default_fast_user_data(config: &Config) -> Result<PathBuf> {
+    let key = crate::ssh::ensure_ssh_keypair(config)?;
+    const TEMPLATE: &str = include_str!("../test_data/fast-template-user-data.yaml");
+    // Swap in the runtime SSH key. The template ships with a stub pubkey
+    // that belongs to this host's ~/.meda/ssh dir; other hosts need
+    // their own — rewriting is cheaper than templating with handlebars.
+    let baked_key = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIHw4qsecUqGtXKKSO4wYcWG0nzoz5J9e2oBhb+jqBokY meda@localhost";
+    let body = TEMPLATE.replace(baked_key, &key.public_key);
+    let path = config.asset_dir.join("fast-template-user-data.yaml");
+    fs::create_dir_all(&config.asset_dir)?;
+    fs::write(&path, body)?;
+    Ok(path)
+}
+
 pub async fn run_from_image(
     config: &Config,
     image: &str,

@@ -1,0 +1,22 @@
+#cloud-config
+# Fast-template user-data: provision the cirun user + meda's SSH key,
+# then short-circuit cloud-init on subsequent boots so the snapshot
+# wakes back up in ~1 s instead of replaying cloud-init each time.
+
+users:
+  - name: cirun
+    sudo: ALL=(ALL) NOPASSWD:ALL
+    passwd: $6$ep7LxhhmhQHf.TiY$qPJVJQCnPMnyFdmD0ymP7CH2dos0awET8JlSzDqoiK6AOQwDpx8fCLJ1C5c7nvkVJbIpQCOalC8l2BGkRzogM.
+    lock_passwd: false
+    groups: sudo
+    shell: /bin/bash
+    ssh_authorized_keys:
+      - ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIHw4qsecUqGtXKKSO4wYcWG0nzoz5J9e2oBhb+jqBokY meda@localhost
+
+ssh_pwauth: true
+
+runcmd:
+  # Disable cloud-init for subsequent boots (~114 ms saved per
+  # restore). cloud-init still completes THIS boot, then short-
+  # circuits via the touch-file.
+  - [touch, /etc/cloud/cloud-init.disabled]

@@ -172,7 +172,13 @@ pub enum Commands {
         from_vm: Option<String>,
     },
 
-    /// Run a VM from an image
+    /// Run a VM from an image — classic cold-boot path (~27s). Use
+    /// `meda run` without --cold for the auto-template fast path
+    /// (~1.5s once the template is built).
+    ///
+    /// Flags:
+    ///   --cold    force cold-boot even if a template is cached
+    #[command(alias = "cold-run")]
     Run {
         /// Image reference (e.g., ubuntu:latest, ghcr.io/cirunlabs/ubuntu:v1.0)
         image: String,
@@ -212,6 +218,16 @@ pub enum Commands {
         /// VFIO device path for PCI passthrough (repeatable, e.g., /sys/bus/pci/devices/0000:01:00.0)
         #[arg(long)]
         device: Vec<String>,
+
+        /// Skip the auto-template fast path and cold-boot as before.
+        #[arg(long)]
+        cold: bool,
+
+        /// After the VM is ready, exec into it with ssh. The VM
+        /// keeps running after you exit the shell; clean it up
+        /// with `meda delete <vm_name>`.
+        #[arg(long)]
+        ssh: bool,
     },
 
     /// Clean up orphaned TAP devices
@@ -219,6 +235,30 @@ pub enum Commands {
         /// Show what would be cleaned up without actually doing it
         #[arg(long)]
         dry_run: bool,
+    },
+
+    /// Snapshot a running VM to its own dir (for fast restore later)
+    Snapshot {
+        /// Name of the VM
+        name: String,
+    },
+
+    /// Restore a VM from its snapshot (~500ms vs ~27s cold boot)
+    Restore {
+        /// Name of the VM
+        name: String,
+    },
+
+    /// List VMs that have a snapshot (i.e. are ready to fast-restore)
+    Templates,
+
+    /// Clone a snapshotted VM into a new one (fast-restore ready)
+    Clone {
+        /// Source VM (must have a snapshot)
+        template: String,
+
+        /// Name of the new VM
+        new_name: String,
     },
 
     /// Start REST API server

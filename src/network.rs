@@ -224,85 +224,46 @@ pub async fn setup_networking(
 ) -> Result<()> {
     debug!("Setting up networking for VM {}", name);
 
-    // Check if tap device exists
-    let output = run_command_with_output("sudo", &["ip", "link", "show", tap_name])?;
+    // Fold every sudo'd network-plumbing call into a single bash
+    // invocation. Each individual `sudo` spawn costs 20-50ms on this
+    // host — doing 10 of them sequentially dominated the ~600ms
+    // per-VM create latency. One `sudo bash -c '…'` cuts that to a
+    // single sudo round-trip plus cheap in-shell forks.
+    //
+    // Idempotent by construction: tap creation checks /sys (world-
+    // readable, no sudo cost) and bails early if the tap already
+    // has the right config; iptables calls use `-C … || -A …` so
+    // an already-present rule short-circuits the add.
+    let script = format!(
+        r#"set -e
 
-    if !output.status.success() {
-        // Create tap device
-        run_command("sudo", &["ip", "tuntap", "add", tap_name, "mode", "tap"])?;
-        run_command(
-            "sudo",
-            &[
-                "ip",
-                "addr",
-                "add",
-                &format!("{}.1/24", subnet),
-                "dev",
-                tap_name,
-            ],
-        )?;
-        run_command("sudo", &["ip", "link", "set", tap_name, "up"])?;
-    }
+# 1) Tap device. Creating a tap that already exists errors out
+#    with EEXIST; skip if /sys already knows about it.
+if [ ! -e /sys/class/net/{tap_name} ]; then
+  ip tuntap add {tap_name} mode tap
+  ip addr add {subnet}.1/24 dev {tap_name}
+  ip link set {tap_name} up
+fi
 
-    // Enable forwarding
-    run_command("sudo", &["sysctl", "-q", "net.ipv4.ip_forward=1"])?;
+# 2) IPv4 forwarding — set-and-forget; no-op after first run.
+sysctl -qw net.ipv4.ip_forward=1
 
-    // Check if masquerade rule exists (use -w to wait for xtables lock)
-    let check_cmd = format!(
-        "sudo iptables -w -t nat -C POSTROUTING -s {}.0/24 -j MASQUERADE",
-        subnet
+# 3) NAT MASQUERADE for the tap's subnet. Idempotent via -C gate.
+iptables -w -t nat -C POSTROUTING -s {subnet}.0/24 -j MASQUERADE 2>/dev/null \
+  || iptables -w -t nat -A POSTROUTING -s {subnet}.0/24 -j MASQUERADE
+
+# 4) FORWARD accept-rules for packets into/out-of the tap.
+iptables -w -C FORWARD -i {tap_name} -j ACCEPT 2>/dev/null \
+  || iptables -w -A FORWARD -i {tap_name} -j ACCEPT
+
+iptables -w -C FORWARD -o {tap_name} -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT 2>/dev/null \
+  || iptables -w -A FORWARD -o {tap_name} -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT
+"#,
+        tap_name = tap_name,
+        subnet = subnet,
     );
-    let check_result = run_command_with_output("bash", &["-c", &check_cmd]);
 
-    if check_result.is_err() || !check_result.unwrap().status.success() {
-        // Add masquerade rule
-        run_command(
-            "sudo",
-            &[
-                "iptables",
-                "-w",
-                "-t",
-                "nat",
-                "-A",
-                "POSTROUTING",
-                "-s",
-                &format!("{}.0/24", subnet),
-                "-j",
-                "MASQUERADE",
-            ],
-        )?;
-    }
-
-    // Allow traffic from VM to leave host (use -w to wait for xtables lock)
-    let check_forward = format!("sudo iptables -w -C FORWARD -i {} -j ACCEPT", tap_name);
-    let check_result = run_command_with_output("bash", &["-c", &check_forward]);
-
-    if check_result.is_err() || !check_result.unwrap().status.success() {
-        run_command(
-            "sudo",
-            &[
-                "iptables", "-w", "-A", "FORWARD", "-i", tap_name, "-j", "ACCEPT",
-            ],
-        )?;
-        run_command(
-            "sudo",
-            &[
-                "iptables",
-                "-w",
-                "-A",
-                "FORWARD",
-                "-o",
-                tap_name,
-                "-m",
-                "conntrack",
-                "--ctstate",
-                "RELATED,ESTABLISHED",
-                "-j",
-                "ACCEPT",
-            ],
-        )?;
-    }
-
+    run_command("sudo", &["bash", "-c", &script])?;
     Ok(())
 }
 

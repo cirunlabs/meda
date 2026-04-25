@@ -1,6 +1,7 @@
 use crate::config::Config;
 use crate::error::{Error, Result};
-use crate::network::{cleanup_networking, generate_random_mac, setup_networking};
+use crate::netns::NetnsSpec;
+use crate::network::{cleanup_networking, generate_random_mac};
 use crate::util::{
     check_process_running, download_file, ensure_dependency, run_command, write_string_to_file,
 };
@@ -370,11 +371,17 @@ ethernets:
         ],
     )?;
 
-    // Setup networking
+    // Per-VM network namespace. Everything below — tap, iptables,
+    // forwarding, the CH process itself — lives inside a dedicated
+    // `meda-<hash>` netns so N concurrent VMs don't collide on the
+    // template's baked-in guest IP. Host reaches the guest via the
+    // veth pair's netns-side IP; see `src/netns.rs` for the wiring.
     if !json {
-        info!("Setting up host networking");
+        info!("Setting up VM network namespace");
     }
-    setup_networking(config, name, &tap_name, &subnet).await?;
+    let netns_spec = NetnsSpec::for_vm(name);
+    netns_spec.save(&vm_dir)?;
+    crate::netns::create(&netns_spec, &subnet, &tap_name)?;
 
     // Build device passthrough flags
     let device_section = if resources.devices.is_empty() {
@@ -388,45 +395,53 @@ ethernets:
         format!(" \\\n{}", args.join(" \\\n"))
     };
 
-    // Create start script
+    // Start script. CH runs inside this VM's dedicated netns so the
+    // tap device, iptables rules, and (via the veth pair) the guest
+    // itself live in their own isolated network world. `sudo` on
+    // `ip netns exec` is required because entering a netns needs
+    // CAP_SYS_ADMIN. The child CH process therefore runs as root —
+    // same as with kernel-tap networking before — and tracks its
+    // own pid inside the sudo'd bash so `meda stop`/`delete` can
+    // still signal it directly.
     let start_script = format!(
         r#"#!/bin/bash
-cd "{}"
-{} \
-  --api-socket path={}/api.sock \
-  --console off \
-  --serial tty \
-  --kernel "{}" \
-  --cpus boot={} \
-  --memory size={} \
-  --disk path={}/rootfs.qcow2,image_type=qcow2,backing_files=on path="{}/ci.iso" \
-  --net tap={},mac={} \
-  --rng src=/dev/urandom{} \
-  > "{}/ch.log" 2>&1 &
-echo $! > "{}/pid"
+cd "{vmdir}"
+sudo bash -c '
+  ip netns exec {netns} {ch} \
+    --api-socket path={vmdir}/api.sock \
+    --console off \
+    --serial tty \
+    --kernel "{fw}" \
+    --cpus boot={cpus} \
+    --memory size={mem} \
+    --disk path={vmdir}/rootfs.qcow2,image_type=qcow2,backing_files=on path="{vmdir}/ci.iso" \
+    --net tap={tap},mac={mac} \
+    --rng src=/dev/urandom{devsec} \
+    > "{vmdir}/ch.log" 2>&1 &
+  echo $! > "{vmdir}/pid"
+  # File is root-owned; relax so the host user can read/delete.
+  chmod 0644 "{vmdir}/pid"
+'
 
-# Check if command started successfully
 sleep 2
-if ! ps -p $(cat "{}/pid" 2>/dev/null) &>/dev/null; then
-  echo "ERROR: Cloud Hypervisor failed to start. Check log: {}/ch.log" >&2
+if ! sudo kill -0 "$(cat "{vmdir}/pid" 2>/dev/null)" 2>/dev/null; then
+  echo "ERROR: Cloud Hypervisor failed to start. Check log: {vmdir}/ch.log" >&2
   exit 1
 fi
+# CH ran as root under the netns, so its API socket is owned by
+# root. Relax perms so later ch-remote calls from the unprivileged
+# user (meda snapshot, meda get, etc.) can talk to it.
+sudo chmod 0666 "{vmdir}/api.sock" 2>/dev/null || true
 "#,
-        vm_dir.display(),
-        config.ch_bin.display(),
-        vm_dir.display(),
-        config.fw_bin.display(),
-        resources.cpus,
-        resources.memory,
-        vm_dir.display(),
-        vm_dir.display(),
-        tap_name,
-        mac,
-        device_section,
-        vm_dir.display(),
-        vm_dir.display(),
-        vm_dir.display(),
-        vm_dir.display()
+        vmdir = vm_dir.display(),
+        netns = netns_spec.netns,
+        ch = config.ch_bin.display(),
+        fw = config.fw_bin.display(),
+        cpus = resources.cpus,
+        mem = resources.memory,
+        tap = tap_name,
+        mac = mac,
+        devsec = device_section,
     );
 
     let start_script_path = vm_dir.join("start.sh");
@@ -471,13 +486,23 @@ pub async fn list(config: &Config, json: bool) -> Result<()> {
 
         if path.is_dir() {
             let name = path.file_name().unwrap().to_string_lossy().to_string();
-            let state = if check_vm_running(config, &name)? {
-                "running".to_string()
-            } else {
-                "stopped".to_string()
-            };
+            let running = check_vm_running(config, &name)?;
+            let state = if running { "running" } else { "stopped" }.to_string();
 
-            let ip = get_vm_ip(config, &name).unwrap_or_else(|_| "N/A".to_string());
+            // For a running VM, prefer the host-reachable address
+            // (netns veth IP, legacy smoltcp forward, …); fall back
+            // to the baked-in guest IP only as a last resort. For a
+            // stopped VM nothing is reachable, so show a dash —
+            // printing an IP that doesn't actually answer was the
+            // confusing bit users hit (`ssh 192.168.X.2` → No
+            // route to host).
+            let ip = if running {
+                read_display_ip(&path)
+                    .or_else(|| get_vm_ip(config, &name).ok())
+                    .unwrap_or_else(|| "-".to_string())
+            } else {
+                "-".to_string()
+            };
             let vcpus = get_vm_cpus(config, &name).unwrap_or_else(|_| config.cpus.to_string());
             let memory = get_vm_memory(config, &name).unwrap_or_else(|_| config.mem.clone());
             let disk = get_vm_disk_size(config, &name).unwrap_or_else(|_| config.disk_size.clone());
@@ -582,7 +607,9 @@ pub async fn get(config: &Config, name: &str, json: bool) -> Result<()> {
         "stopped".to_string()
     };
 
-    let ip = get_vm_ip(config, name).ok();
+    // Same priority as `meda list` / `meda ip`: netns IP first, then
+    // legacy fallbacks, then the (host-unreachable) baked guest IP.
+    let ip = read_display_ip(&vm_dir).or_else(|| get_vm_ip(config, name).ok());
 
     // Collect additional details
     let mut details = serde_json::Map::new();
@@ -838,12 +865,19 @@ pub async fn stop(config: &Config, name: &str, json: bool) -> Result<()> {
     let pid_file = vm_dir.join("pid");
     if let Ok(pid_str) = fs::read_to_string(&pid_file) {
         if let Ok(pid) = pid_str.trim().parse::<u32>() {
-            // Try graceful shutdown first
-            let _ = Command::new("kill")
-                .args(["-TERM", &pid.to_string()])
-                .output();
+            // VMs started under the netns path run as root (via
+            // `sudo ip netns exec`), so a plain `kill` from our
+            // unprivileged user won't work. Use `sudo kill` — it's
+            // NOPASSWD on this box. Keep non-sudo kill as a
+            // fallback for legacy non-netns VMs.
+            let term = |sig: &str, pid: u32| {
+                let _ = Command::new("sudo")
+                    .args(["kill", sig, &pid.to_string()])
+                    .output();
+                let _ = Command::new("kill").args([sig, &pid.to_string()]).output();
+            };
+            term("-TERM", pid);
 
-            // Wait for graceful shutdown
             for _ in 0..10 {
                 if !check_process_running(pid) {
                     break;
@@ -851,11 +885,8 @@ pub async fn stop(config: &Config, name: &str, json: bool) -> Result<()> {
                 thread::sleep(Duration::from_millis(500));
             }
 
-            // Force kill if still running
             if check_process_running(pid) {
-                let _ = Command::new("kill")
-                    .args(["-KILL", &pid.to_string()])
-                    .output();
+                term("-KILL", pid);
             }
         }
     }
@@ -896,7 +927,13 @@ pub async fn delete(config: &Config, name: &str, json: bool) -> Result<()> {
         info!("Deleting VM: {}", name);
     }
 
-    // Clean up networking
+    // Tear down per-VM netns + veth first, then the legacy
+    // host-scoped iptables/tap cleanup in case the VM was created
+    // before netns support shipped.
+    let netns_spec = NetnsSpec::load_or_compute(&vm_dir, name);
+    if let Err(e) = crate::netns::destroy(&netns_spec) {
+        log::warn!("netns destroy failed for {}: {}", name, e);
+    }
     cleanup_networking(config, name).await?;
 
     // Remove VM directory
@@ -923,7 +960,12 @@ pub async fn ip(config: &Config, name: &str, json: bool) -> Result<()> {
         return Err(Error::VmNotFound(name.to_string()));
     }
 
-    let ip = get_vm_ip(config, name)?;
+    // Same priority order as `meda list`: prefer the host-routable
+    // netns-side IP, fall back to the legacy paths, finally fall
+    // back to the guest's baked-in IP. Returning the guest IP for a
+    // netns-backed VM was misleading — that address is reachable
+    // only from inside the VM's own netns.
+    let ip = read_display_ip(&vm_dir).map_or_else(|| get_vm_ip(config, name), Ok)?;
 
     if json {
         let result = serde_json::json!({
@@ -953,6 +995,40 @@ pub fn check_vm_running(config: &Config, name: &str) -> Result<bool> {
     }
 
     Ok(false)
+}
+
+/// Preferred display IP for `meda list`. Priority:
+///   1. `$VMDIR/guest_ip` — the per-clone in-guest IP assigned by the
+///      reconfig agent; this is what the user actually cares about
+///      (it's what `ip addr` reports inside the guest).
+///   2. The host-side `127.0.0.1:port` smoltcp forward — for clones
+///      that either haven't been reconfigured yet or are pre-agent.
+///   3. None — caller falls back to the guest IP baked in the VM's
+///      disk via `get_vm_ip`.
+fn read_display_ip(vm_dir: &std::path::Path) -> Option<String> {
+    // Per-VM netns layout (the current default): users reach the
+    // guest at the veth's netns-side IP, not the guest's baked-in
+    // IP. iptables inside the netns DNATs it to the guest. This is
+    // what `meda run --json` advertises, and what `meda list`
+    // should show so users can ssh/curl without guessing.
+    if let Ok(body) = fs::read_to_string(vm_dir.join("netns.json")) {
+        if let Ok(v) = serde_json::from_str::<serde_json::Value>(&body) {
+            if let Some(ip) = v.get("netns_ip").and_then(|v| v.as_str()) {
+                return Some(ip.to_string());
+            }
+        }
+    }
+    if let Ok(ip) = fs::read_to_string(vm_dir.join("guest_ip")) {
+        let ip = ip.trim();
+        if !ip.is_empty() {
+            return Some(ip.to_string());
+        }
+    }
+    let body = fs::read_to_string(vm_dir.join("smoltcp_forward")).ok()?;
+    body.split_whitespace()
+        .next()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
 }
 
 pub fn get_vm_ip(config: &Config, name: &str) -> Result<String> {
