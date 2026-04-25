@@ -2165,7 +2165,8 @@ fi
 
         if !options.no_start {
             // Show useful information about the VM
-            let ip = crate::vm::get_vm_ip(config, vm_name).unwrap_or_else(|_| "N/A".to_string());
+            let ip =
+                crate::vm::get_routable_ip(config, vm_name).unwrap_or_else(|_| "N/A".to_string());
             info!("💡 VM IP address: {}", ip);
             info!("💡 Use 'meda stop {}' to stop the VM", vm_name);
             info!("💡 Use 'meda delete {}' to remove the VM", vm_name);

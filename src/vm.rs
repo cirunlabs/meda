@@ -1043,6 +1043,19 @@ pub fn get_vm_ip(config: &Config, name: &str) -> Result<String> {
     Ok(format!("{}.2", subnet.trim()))
 }
 
+/// Host-routable IP for a VM, mirroring the priority used by `meda
+/// list`/`meda ip`/`meda get`. Prefer the netns-side veth IP (the
+/// only address reachable from the host on the netns path); fall
+/// back to the legacy baked guest IP for cold-path / pre-netns VMs.
+///
+/// API consumers (cirun-agent, REST clients) MUST use this rather
+/// than `get_vm_ip` directly, otherwise they hand callers an IP that
+/// is reachable only from inside the VM's own network namespace.
+pub fn get_routable_ip(config: &Config, name: &str) -> Result<String> {
+    let vm_dir = config.vm_dir(name);
+    read_display_ip(&vm_dir).map_or_else(|| get_vm_ip(config, name), Ok)
+}
+
 fn get_vm_devices(config: &Config, name: &str) -> Vec<String> {
     let devices_file = config.vm_dir(name).join("devices");
     if devices_file.exists() {
@@ -1259,6 +1272,41 @@ mod tests {
 
         let result = get_vm_ip(&config, "nonexistent-vm");
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_get_routable_ip_prefers_netns() {
+        // When netns.json exists, the routable IP must come from there,
+        // not from the baked guest subnet — otherwise API consumers like
+        // cirun-agent get an IP that is reachable only from inside the
+        // VM's own netns and fail to SSH in.
+        let (config, _temp_dir) = setup_test_config();
+
+        let vm_dir = config.vm_dir("test-vm");
+        std::fs::create_dir_all(&vm_dir).unwrap();
+        std::fs::write(vm_dir.join("subnet"), "192.168.100").unwrap();
+        std::fs::write(
+            vm_dir.join("netns.json"),
+            r#"{"netns_ip":"10.99.42.2"}"#,
+        )
+        .unwrap();
+
+        let ip = get_routable_ip(&config, "test-vm").unwrap();
+        assert_eq!(ip, "10.99.42.2");
+    }
+
+    #[test]
+    fn test_get_routable_ip_falls_back_to_subnet() {
+        // No netns.json (legacy / cold-path VM): fall back to the baked
+        // guest IP so the helper is a strict superset of get_vm_ip.
+        let (config, _temp_dir) = setup_test_config();
+
+        let vm_dir = config.vm_dir("test-vm");
+        std::fs::create_dir_all(&vm_dir).unwrap();
+        std::fs::write(vm_dir.join("subnet"), "192.168.100").unwrap();
+
+        let ip = get_routable_ip(&config, "test-vm").unwrap();
+        assert_eq!(ip, "192.168.100.2");
     }
 
     #[test]
