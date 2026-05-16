@@ -59,8 +59,12 @@ pub fn total_disk_gb(vm_root: &Path) -> u64 {
     };
     match nix::sys::statvfs::statvfs(&probe) {
         Ok(st) => {
-            // blocks × frsize → bytes. Use u64 throughout.
-            let total: u64 = u64::from(st.blocks()) * st.fragment_size();
+            // blocks × frsize → bytes. nix exposes these as
+            // `fsblkcnt_t` / `fsfilcnt_t`, which is u32 on macOS dev
+            // boxes but u64 on Linux CI; `as u64` is a no-op on the
+            // wider platform and a safe widening cast on the narrower.
+            #[allow(clippy::unnecessary_cast)]
+            let total: u64 = (st.blocks() as u64) * (st.fragment_size() as u64);
             total / (1024 * 1024 * 1024)
         }
         Err(_) => 0,
