@@ -776,8 +776,21 @@ pub async fn run_from_image(
         resources,
     };
 
-    match image::run_from_image(&state.config, &request.image, options, true).await {
-        Ok(_) => {
+    // The CLI's `meda run` defaults to the snapshot/restore fast path
+    // (~120ms return, ~1.3s sshd) and only falls back to cold-boot
+    // cloud-init when `--no-start` is passed (snapshot/restore implies
+    // running, so there's nothing to "not start"). Mirror that here so
+    // API consumers get the same speed without an extra endpoint.
+    let result = if request.no_start {
+        image::run_from_image(&state.config, &request.image, options, true)
+            .await
+            .map(|_| serde_json::Value::Null)
+    } else {
+        image::run_instant_capture(&state.config, &request.image, options).await
+    };
+
+    match result {
+        Ok(summary) => {
             let action = if request.no_start {
                 "created"
             } else {
@@ -787,7 +800,7 @@ pub async fn run_from_image(
             Ok(Json(VmResponse {
                 success: true,
                 message: format!("Successfully {} VM from image: {}", action, request.image),
-                vm: None,
+                vm: vm_info_from_run_summary(&summary),
             }))
         }
         Err(e) => {
@@ -802,6 +815,27 @@ pub async fn run_from_image(
             ))
         }
     }
+}
+
+/// Extract the {vm, host} portion of a `run_instant_capture` summary
+/// into the API's `VmInfo` shape so HTTP callers get the routable IP
+/// without a follow-up `GET /vms/{name}`. Returns `None` for the
+/// cold-boot path (which returns `Value::Null`) and for any summary
+/// that lacks the required fields — callers fall back to the existing
+/// detail endpoint in that case.
+fn vm_info_from_run_summary(summary: &serde_json::Value) -> Option<VmInfo> {
+    let name = summary.get("vm")?.as_str()?.to_string();
+    let ip = summary.get("host")?.as_str()?.to_string();
+    Some(VmInfo {
+        name,
+        state: "running".to_string(),
+        ip,
+        vcpus: String::new(),
+        memory: String::new(),
+        disk: String::new(),
+        devices: Vec::new(),
+        created: String::new(),
+    })
 }
 
 /// Health check endpoint
@@ -979,4 +1013,41 @@ async fn get_vm_details(
         ip,
         details: Some(serde_json::Value::Object(details)),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn vm_info_from_summary_extracts_name_and_host() {
+        let summary = serde_json::json!({
+            "vm": "ubuntu-1234",
+            "host": "10.99.7.2",
+            "ssh": "cirun@10.99.7.2",
+            "port": 22,
+        });
+        let info = vm_info_from_run_summary(&summary).expect("expected Some");
+        assert_eq!(info.name, "ubuntu-1234");
+        assert_eq!(info.ip, "10.99.7.2");
+        assert_eq!(info.state, "running");
+    }
+
+    #[test]
+    fn vm_info_from_summary_returns_none_for_cold_path_null() {
+        // run_from_image's success arm is mapped to Value::Null — the
+        // cold path doesn't expose a host IP synchronously, so callers
+        // fall back to `GET /vms/{name}` exactly as before.
+        assert!(vm_info_from_run_summary(&serde_json::Value::Null).is_none());
+    }
+
+    #[test]
+    fn vm_info_from_summary_returns_none_when_fields_missing() {
+        // Defensive: a future change to run_instant_capture's output
+        // shape that drops `vm` or `host` should not produce a VmInfo
+        // with empty strings — better to omit and let detail endpoint
+        // fill in.
+        assert!(vm_info_from_run_summary(&serde_json::json!({"host": "x"})).is_none());
+        assert!(vm_info_from_run_summary(&serde_json::json!({"vm": "x"})).is_none());
+    }
 }
