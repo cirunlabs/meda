@@ -21,7 +21,7 @@ rand = "0.8"
 log = "0.4"
 env_logger = "0.10"
 dirs = "5.0"
-nix = { version = "0.27", features = ["net", "process", "sched", "signal"] }
+nix = { version = "0.27", features = ["net", "process", "sched", "signal", "fs"] }
 tempfile = "3.8"
 reqwest = { version = "0.11", features = ["blocking", "json", "stream"] }
 futures-util = "0.3"

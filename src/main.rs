@@ -1,9 +1,11 @@
+mod admission;
 mod api;
 mod chunking;
 mod cli;
 mod config;
 mod error;
 mod gpt;
+mod host_capacity;
 mod image;
 mod netns;
 mod network;

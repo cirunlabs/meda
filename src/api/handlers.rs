@@ -1,11 +1,12 @@
 use axum::{
     extract::{Path, State},
-    http::StatusCode,
-    response::Json,
+    http::{HeaderMap, HeaderValue, StatusCode},
+    response::{IntoResponse, Json, Response},
 };
 use log::{error, info};
 
 use super::{models::*, AppState};
+use crate::admission::{self, can_admit, AdmissionDenied, Committed, VmRequest};
 use crate::{image, vm};
 
 /// List all VMs
@@ -758,14 +759,41 @@ pub async fn prune_images(
 pub async fn run_from_image(
     State(state): State<AppState>,
     Json(request): Json<ImageRunRequest>,
-) -> Result<Json<VmResponse>, (StatusCode, Json<ApiError>)> {
+) -> Response {
     let resources = vm::VmResources::from_config_with_overrides(
         &state.config,
         request.memory.as_deref(),
         request.cpus,
         request.disk.as_deref(),
-        request.devices,
+        request.devices.clone(),
     );
+
+    // Admission control: strict no-overcommit. If the host can't take
+    // another VM of this size we return 503 + Retry-After instead of
+    // spawning and letting the kernel OOM-killer fire. (2026-05-16: a
+    // 50-job burst killed the user's systemd session along with the
+    // VMs — this is the safety belt.)
+    let req = VmRequest {
+        mem_gb: admission::parse_size_gb(&resources.memory),
+        cpu: resources.cpus as u32,
+        disk_gb: admission::parse_size_gb(&resources.disk_size),
+    };
+    let committed = match current_committed(&state.config).await {
+        Ok(c) => c,
+        Err(e) => {
+            error!("Failed to read committed resources: {e}");
+            return api_error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Failed to read committed resources",
+                "ADMISSION_PROBE_ERROR",
+                Some(serde_json::json!({"message": e.to_string()})),
+            );
+        }
+    };
+    if let Err(denied) = can_admit(&req, &committed, &state.budget) {
+        log::warn!("admission denied: {}", denied.message());
+        return admission_denied_response(&denied);
+    }
 
     let options = image::RunOptions {
         vm_name: request.name.as_deref(),
@@ -797,24 +825,125 @@ pub async fn run_from_image(
                 "created and started"
             };
             info!("Successfully {} VM from image: {}", action, request.image);
-            Ok(Json(VmResponse {
+            Json(VmResponse {
                 success: true,
                 message: format!("Successfully {} VM from image: {}", action, request.image),
                 vm: vm_info_from_run_summary(&summary),
-            }))
+            })
+            .into_response()
         }
         Err(e) => {
             error!("Failed to run VM from image: {}", e);
-            Err((
+            api_error_response(
                 StatusCode::INTERNAL_SERVER_ERROR,
-                Json(ApiError {
-                    error: "Failed to run VM from image".to_string(),
-                    code: "IMAGE_RUN_ERROR".to_string(),
-                    details: Some(serde_json::json!({"message": e.to_string()})),
-                }),
-            ))
+                "Failed to run VM from image",
+                "IMAGE_RUN_ERROR",
+                Some(serde_json::json!({"message": e.to_string()})),
+            )
         }
     }
+}
+
+fn api_error_response(
+    status: StatusCode,
+    error: &str,
+    code: &str,
+    details: Option<serde_json::Value>,
+) -> Response {
+    (
+        status,
+        Json(ApiError {
+            error: error.to_string(),
+            code: code.to_string(),
+            details,
+        }),
+    )
+        .into_response()
+}
+
+/// Build a 503 response for an admission denial, including a
+/// `Retry-After: 10` header so polite clients can back off rather than
+/// hammer the host. The body uses the existing `ApiError` shape so
+/// callers don't need a special branch for this status code.
+fn admission_denied_response(denied: &AdmissionDenied) -> Response {
+    let body = Json(ApiError {
+        error: denied.message(),
+        code: denied.code().to_string(),
+        details: None,
+    });
+    let mut headers = HeaderMap::new();
+    headers.insert("Retry-After", HeaderValue::from_static("10"));
+    (StatusCode::SERVICE_UNAVAILABLE, headers, body).into_response()
+}
+
+/// Sum mem / cpu / disk across meda's live state for the admission
+/// check. Mem + CPU count only RUNNING VMs (templates are stopped and
+/// don't pressure host RAM). Disk counts everything on-disk — qcow2
+/// overlays grow until deletion, even stopped VMs occupy real bytes.
+async fn current_committed(config: &crate::config::Config) -> crate::error::Result<Committed> {
+    let vms = get_vm_list(config).await?;
+    let mut c = Committed::default();
+    for v in vms {
+        let mem_gb = admission::parse_size_gb(&v.memory);
+        let disk_gb = admission::parse_size_gb(&v.disk);
+        let cpu: u32 = v.vcpus.trim().parse().unwrap_or(0);
+        c.disk_gb = c.disk_gb.saturating_add(disk_gb);
+        if v.state == "running" {
+            c.mem_gb = c.mem_gb.saturating_add(mem_gb);
+            c.cpu = c.cpu.saturating_add(cpu);
+        }
+    }
+    Ok(c)
+}
+
+/// `GET /api/v1/capacity` — what's the host's admission budget vs.
+/// what's currently in use? Callers (cirun-agent, dashboards) use this
+/// to decide whether to attempt a `POST /images/run` or back off.
+#[utoipa::path(
+    get,
+    path = "/api/v1/capacity",
+    responses(
+        (status = 200, description = "Current host capacity", body = serde_json::Value),
+        (status = 500, description = "Internal server error", body = ApiError)
+    ),
+    tag = "System"
+)]
+pub async fn get_capacity(
+    State(state): State<AppState>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<ApiError>)> {
+    let committed = current_committed(&state.config).await.map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiError {
+                error: "Failed to read committed resources".to_string(),
+                code: "CAPACITY_PROBE_ERROR".to_string(),
+                details: Some(serde_json::json!({"message": e.to_string()})),
+            }),
+        )
+    })?;
+    let b = &state.budget;
+    Ok(Json(serde_json::json!({
+        "total": {
+            "mem_gb": b.total_mem_gb,
+            "cpu":    b.total_cpu,
+            "disk_gb": b.total_disk_gb,
+        },
+        "reserve": {
+            "mem_gb": b.reserve_mem_gb,
+            "cpu":    b.reserve_cpu,
+            "disk_gb": b.reserve_disk_gb,
+        },
+        "committed": {
+            "mem_gb": committed.mem_gb,
+            "cpu":    committed.cpu,
+            "disk_gb": committed.disk_gb,
+        },
+        "available": {
+            "mem_gb": b.mem_available_gb(committed.mem_gb),
+            "cpu":    b.cpu_available(committed.cpu),
+            "disk_gb": b.disk_available_gb(committed.disk_gb),
+        }
+    })))
 }
 
 /// Extract the {vm, host} portion of a `run_instant_capture` summary
