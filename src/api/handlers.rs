@@ -6,7 +6,7 @@ use axum::{
 use log::{error, info};
 
 use super::{models::*, AppState};
-use crate::admission::{self, can_admit, AdmissionDenied, Committed, VmRequest};
+use crate::admission::{self, AdmissionDenied, Committed, VmRequest};
 use crate::{image, vm};
 
 /// List all VMs
@@ -790,10 +790,22 @@ pub async fn run_from_image(
             );
         }
     };
-    if let Err(denied) = can_admit(&req, &committed, &state.budget) {
-        log::warn!("admission denied: {}", denied.message());
-        return admission_denied_response(&denied);
-    }
+    // Atomic try_reserve sees other concurrent handlers' in-flight
+    // reservations even when their VM dirs aren't on disk yet — the
+    // earlier `can_admit(..., &committed)` form was racy under burst
+    // load (10 simultaneous handlers all read committed=0, all admitted,
+    // host OOMed). Reservation is an RAII guard; we keep it alive until
+    // the spawn returns. On success the VM dir is on disk by then and
+    // the next handler picks it up via `current_committed`; on failure
+    // the reservation drops + slot is freed immediately. Either way no
+    // counter slot leaks.
+    let reservation = match state.admission.try_reserve(&req, &committed) {
+        Ok(r) => r,
+        Err(denied) => {
+            log::warn!("admission denied: {}", denied.message());
+            return admission_denied_response(&denied);
+        }
+    };
 
     let options = image::RunOptions {
         vm_name: request.name.as_deref(),
@@ -816,6 +828,12 @@ pub async fn run_from_image(
     } else {
         image::run_instant_capture(&state.config, &request.image, options).await
     };
+    // Keep the reservation alive until we've decided whether the spawn
+    // succeeded (VM dir on disk → next current_committed sees it) or
+    // failed (no on-disk record → drop releases the slot). Explicit
+    // `drop` here to make the lifetime obvious to readers; without it
+    // the guard is held until end-of-function which works but is murky.
+    drop(reservation);
 
     match result {
         Ok(summary) => {
@@ -921,7 +939,18 @@ pub async fn get_capacity(
             }),
         )
     })?;
-    let b = &state.budget;
+    let b = &state.admission.budget;
+    // `committed` from disk + the admission's in-flight reservations
+    // gives the actual capacity picture. Without summing in-flight,
+    // the capacity endpoint would lie during burst load (showing
+    // free slots that are about to be filled by spawns still inside
+    // their reservation window).
+    let in_flight = state.admission.in_flight();
+    let effective_committed = Committed {
+        mem_gb: committed.mem_gb.saturating_add(in_flight.mem_gb),
+        cpu: committed.cpu.saturating_add(in_flight.cpu),
+        disk_gb: committed.disk_gb.saturating_add(in_flight.disk_gb),
+    };
     Ok(Json(serde_json::json!({
         "total": {
             "mem_gb": b.total_mem_gb,
@@ -934,14 +963,19 @@ pub async fn get_capacity(
             "disk_gb": b.reserve_disk_gb,
         },
         "committed": {
-            "mem_gb": committed.mem_gb,
-            "cpu":    committed.cpu,
-            "disk_gb": committed.disk_gb,
+            "mem_gb": effective_committed.mem_gb,
+            "cpu":    effective_committed.cpu,
+            "disk_gb": effective_committed.disk_gb,
+        },
+        "in_flight": {
+            "mem_gb": in_flight.mem_gb,
+            "cpu":    in_flight.cpu,
+            "disk_gb": in_flight.disk_gb,
         },
         "available": {
-            "mem_gb": b.mem_available_gb(committed.mem_gb),
-            "cpu":    b.cpu_available(committed.cpu),
-            "disk_gb": b.disk_available_gb(committed.disk_gb),
+            "mem_gb": b.mem_available_gb(effective_committed.mem_gb),
+            "cpu":    b.cpu_available(effective_committed.cpu),
+            "disk_gb": b.disk_available_gb(effective_committed.disk_gb),
         }
     })))
 }

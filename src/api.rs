@@ -7,7 +7,7 @@ use tower::ServiceBuilder;
 use tower_http::{cors::CorsLayer, trace::TraceLayer};
 use utoipa::OpenApi;
 
-use crate::admission::Budget;
+use crate::admission::{Admission, Budget};
 use crate::config::Config;
 use crate::host_capacity;
 
@@ -20,11 +20,12 @@ pub use handlers::*;
 #[derive(Clone)]
 pub struct AppState {
     pub config: Arc<Config>,
-    /// Host capacity + operator-set reserve. Built once at startup from
-    /// `/proc/meminfo`, `available_parallelism()`, and `statvfs(vm_root)`.
-    /// Used by the run-from-image handler to refuse requests that would
-    /// push the host past its admission budget.
-    pub budget: Arc<Budget>,
+    /// Race-free admission controller — owns the budget + an in-flight
+    /// counter so concurrent `POST /images/run` requests see each
+    /// other's reservations before deciding to admit. Without this,
+    /// burst load races: N handlers all read pre-burst committed=0,
+    /// all admit, host OOMs. (Observed 2026-05-16.)
+    pub admission: Arc<Admission>,
 }
 
 /// Create the main API router with all endpoints
@@ -59,7 +60,7 @@ pub fn create_router(config: Arc<Config>, host: &str, port: u16) -> Router {
 
     let state = AppState {
         config,
-        budget: Arc::new(budget),
+        admission: Admission::new(budget),
     };
 
     Router::new()

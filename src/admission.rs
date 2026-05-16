@@ -17,6 +17,7 @@
 //! decides "yes / no, here's why" given the numbers.
 
 use std::env;
+use std::sync::{Arc, Mutex};
 
 const RESERVE_MEM_ENV: &str = "MEDA_RESERVE_MEM_GB";
 const RESERVE_CPU_ENV: &str = "MEDA_RESERVE_CPU";
@@ -118,6 +119,99 @@ impl Budget {
         self.total_disk_gb
             .saturating_sub(self.reserve_disk_gb)
             .saturating_sub(committed)
+    }
+}
+
+/// Concurrency-safe admission controller.
+///
+/// The naive `read committed → can_admit → spawn` sequence is racy
+/// under burst load: N concurrent handlers all read the same
+/// pre-burst committed value (none of the in-progress spawns have
+/// written their VM dir yet), all call `can_admit` independently,
+/// all admit, host then OOMs.
+///
+/// `Admission` closes that race by maintaining an in-flight counter
+/// updated under a mutex. Each admit (a) snapshots both the
+/// on-disk committed AND the in-flight tally before deciding, and
+/// (b) atomically reserves the request's resources before releasing
+/// the lock. The reservation is returned as an RAII guard
+/// (`Reservation`) so caller-side bugs can't leak counter slots —
+/// drop releases.
+///
+/// On-disk committed is read by the caller (it requires fs I/O); the
+/// caller passes it in. The locked critical section is therefore very
+/// short: read in_flight, sum, decide, mutate in_flight, drop lock.
+pub struct Admission {
+    pub budget: Budget,
+    in_flight: Mutex<Committed>,
+}
+
+impl Admission {
+    pub fn new(budget: Budget) -> Arc<Self> {
+        Arc::new(Self {
+            budget,
+            in_flight: Mutex::new(Committed::default()),
+        })
+    }
+
+    /// Snapshot of currently-reserved (in-flight, not yet on-disk)
+    /// resources. Used by the capacity endpoint for observability.
+    pub fn in_flight(&self) -> Committed {
+        self.in_flight.lock().map(|g| *g).unwrap_or_default()
+    }
+
+    /// Atomic check-then-reserve. Returns a `Reservation` guard whose
+    /// drop releases the reserved capacity. Concurrent callers see the
+    /// reservation immediately so subsequent requests in the same burst
+    /// correctly account for it.
+    ///
+    /// Caller must pass `persistent_committed` — what's currently on
+    /// disk from prior, already-spawned VMs. We add in-flight to it
+    /// inside the lock to get the effective committed total.
+    pub fn try_reserve(
+        self: &Arc<Self>,
+        req: &VmRequest,
+        persistent_committed: &Committed,
+    ) -> Result<Reservation, AdmissionDenied> {
+        let mut in_flight = self.in_flight.lock().expect("admission in_flight poisoned");
+        let effective = Committed {
+            mem_gb: persistent_committed.mem_gb.saturating_add(in_flight.mem_gb),
+            cpu: persistent_committed.cpu.saturating_add(in_flight.cpu),
+            disk_gb: persistent_committed
+                .disk_gb
+                .saturating_add(in_flight.disk_gb),
+        };
+        can_admit(req, &effective, &self.budget)?;
+        in_flight.mem_gb = in_flight.mem_gb.saturating_add(req.mem_gb);
+        in_flight.cpu = in_flight.cpu.saturating_add(req.cpu);
+        in_flight.disk_gb = in_flight.disk_gb.saturating_add(req.disk_gb);
+        Ok(Reservation {
+            owner: Arc::clone(self),
+            req: *req,
+            released: false,
+        })
+    }
+}
+
+/// RAII guard returned by `Admission::try_reserve`. Dropping it
+/// releases the reserved capacity back to the in-flight tally so
+/// the next admission decision sees the slot free.
+pub struct Reservation {
+    owner: Arc<Admission>,
+    req: VmRequest,
+    released: bool,
+}
+
+impl Drop for Reservation {
+    fn drop(&mut self) {
+        if self.released {
+            return;
+        }
+        if let Ok(mut in_flight) = self.owner.in_flight.lock() {
+            in_flight.mem_gb = in_flight.mem_gb.saturating_sub(self.req.mem_gb);
+            in_flight.cpu = in_flight.cpu.saturating_sub(self.req.cpu);
+            in_flight.disk_gb = in_flight.disk_gb.saturating_sub(self.req.disk_gb);
+        }
     }
 }
 
@@ -424,6 +518,117 @@ mod tests {
         assert_eq!(parse_size_gb("abc"), 0);
         assert_eq!(parse_size_gb("8X"), 0);
         assert_eq!(parse_size_gb("-8G"), 0); // negative parses fail
+    }
+
+    fn small_budget() -> Budget {
+        Budget {
+            total_mem_gb: 16,
+            total_cpu: 4,
+            total_disk_gb: 100,
+            reserve_mem_gb: 0,
+            reserve_cpu: 0,
+            reserve_disk_gb: 0,
+        }
+    }
+
+    #[test]
+    fn concurrent_reservations_against_empty_host_respect_budget() {
+        // Race scenario: 10 concurrent handlers all see persistent_committed=0
+        // (nothing on disk yet). Without in-flight tracking, all 10 would
+        // admit; with it, only as many as the budget supports do.
+        // Budget here: 4 cpu / 4 cpu-per-VM = 4 VMs max.
+        let admission = Admission::new(small_budget());
+        let persistent = Committed::default();
+        let r = VmRequest {
+            mem_gb: 4,
+            cpu: 1,
+            disk_gb: 25,
+        };
+
+        let mut admitted = Vec::new();
+        let mut denied = 0;
+        for _ in 0..10 {
+            match admission.try_reserve(&r, &persistent) {
+                Ok(g) => admitted.push(g),
+                Err(_) => denied += 1,
+            }
+        }
+
+        // 4 cpu budget / 1 cpu per VM = 4 admitted, 6 denied.
+        assert_eq!(admitted.len(), 4);
+        assert_eq!(denied, 6);
+        // The in-flight tally reflects all admitted reservations.
+        let inf = admission.in_flight();
+        assert_eq!(inf.cpu, 4);
+        assert_eq!(inf.mem_gb, 16);
+    }
+
+    #[test]
+    fn dropping_reservation_frees_capacity() {
+        // After a reservation drops (handler returned), the next request
+        // sees the slot freed and admits again.
+        let admission = Admission::new(small_budget());
+        let persistent = Committed::default();
+        let r = VmRequest {
+            mem_gb: 4,
+            cpu: 4,
+            disk_gb: 50,
+        };
+
+        // First fills the whole budget.
+        let g = admission.try_reserve(&r, &persistent).expect("admit");
+        assert!(admission.try_reserve(&r, &persistent).is_err());
+
+        drop(g);
+        // Now there's room again.
+        assert!(admission.try_reserve(&r, &persistent).is_ok());
+    }
+
+    #[test]
+    fn persistent_committed_is_summed_with_in_flight() {
+        // Spawned VMs that already wrote their dirs contribute via the
+        // caller-passed persistent_committed; we still admit only up to
+        // budget minus the sum of both buckets.
+        let admission = Admission::new(small_budget());
+        let persistent = Committed {
+            mem_gb: 12,
+            cpu: 3,
+            disk_gb: 75,
+        };
+        let r = VmRequest {
+            mem_gb: 4,
+            cpu: 1,
+            disk_gb: 25,
+        };
+
+        // Persistent already consumes 3/4 cpu. One more fits.
+        let _g = admission.try_reserve(&r, &persistent).expect("admit");
+        // No more.
+        assert!(admission.try_reserve(&r, &persistent).is_err());
+    }
+
+    #[test]
+    fn denied_reservation_does_not_mutate_in_flight() {
+        // Failed try_reserve must NOT leak counter slots — otherwise
+        // burst-denied requests would slowly poison the in-flight tally
+        // and starve later legitimate requests.
+        let admission = Admission::new(small_budget());
+        let persistent = Committed {
+            mem_gb: 16,
+            cpu: 4,
+            disk_gb: 100,
+        };
+        let r = VmRequest {
+            mem_gb: 4,
+            cpu: 1,
+            disk_gb: 25,
+        };
+
+        let before = admission.in_flight();
+        let _ = admission.try_reserve(&r, &persistent); // expected Err
+        let after = admission.in_flight();
+        assert_eq!(before.cpu, after.cpu);
+        assert_eq!(before.mem_gb, after.mem_gb);
     }
 
     #[test]
