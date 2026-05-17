@@ -390,14 +390,18 @@ pub async fn cleanup_networking(config: &Config, name: &str) -> Result<()> {
         let tap_name = tap_name.trim();
 
         // Remove FORWARD rules referencing this TAP device (inbound and outbound).
-        // Best-effort: the rule may have already been reaped by an earlier pass.
-        let _ = run_command(
+        // Best-effort: the rule may have already been reaped by an earlier pass
+        // (e.g. the per-VM netns went down and took its iptables chains with
+        // it). Use the _quietly variant so the harmless "Bad rule" stderr
+        // doesn't spam meda-stderr.log on every delete — when 50 VMs tear
+        // down at once the noise drowns out real errors.
+        let _ = run_command_quietly(
             "sudo",
             &[
                 "iptables", "-w", "-D", "FORWARD", "-i", tap_name, "-j", "ACCEPT",
             ],
         );
-        let _ = run_command(
+        let _ = run_command_quietly(
             "sudo",
             &[
                 "iptables",
@@ -453,8 +457,10 @@ pub async fn cleanup_networking(config: &Config, name: &str) -> Result<()> {
         }
 
         if !found {
-            // Remove MASQUERADE rule
-            let _ = run_command(
+            // Remove MASQUERADE rule. _quietly because the netns destroy may
+            // have already torn down the per-netns nat table (see comment
+            // above on the FORWARD pair).
+            let _ = run_command_quietly(
                 "sudo",
                 &[
                     "iptables",

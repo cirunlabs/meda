@@ -7,7 +7,9 @@ use tower::ServiceBuilder;
 use tower_http::{cors::CorsLayer, trace::TraceLayer};
 use utoipa::OpenApi;
 
+use crate::admission::{Admission, Budget};
 use crate::config::Config;
+use crate::host_capacity;
 
 pub mod handlers;
 pub mod models;
@@ -18,6 +20,12 @@ pub use handlers::*;
 #[derive(Clone)]
 pub struct AppState {
     pub config: Arc<Config>,
+    /// Race-free admission controller — owns the budget + an in-flight
+    /// counter so concurrent `POST /images/run` requests see each
+    /// other's reservations before deciding to admit. Without this,
+    /// burst load races: N handlers all read pre-burst committed=0,
+    /// all admit, host OOMs. (Observed 2026-05-16.)
+    pub admission: Arc<Admission>,
 }
 
 /// Create the main API router with all endpoints
@@ -33,7 +41,27 @@ pub fn create_router(config: Arc<Config>, host: &str, port: u16) -> Router {
         format!("http://{}:{}", host, port)
     };
 
-    let state = AppState { config };
+    // Detect host capacity once. Reserves come from env vars
+    // (MEDA_RESERVE_MEM_GB / _CPU / _DISK_GB, default 1 each).
+    let budget = Budget::new(
+        host_capacity::total_mem_gb(),
+        host_capacity::total_cpu(),
+        host_capacity::total_disk_gb(&config.vm_root),
+    );
+    log::info!(
+        "host budget: mem={} GiB (reserve={}), cpu={} (reserve={}), disk={} GiB (reserve={})",
+        budget.total_mem_gb,
+        budget.reserve_mem_gb,
+        budget.total_cpu,
+        budget.reserve_cpu,
+        budget.total_disk_gb,
+        budget.reserve_disk_gb,
+    );
+
+    let state = AppState {
+        config,
+        admission: Admission::new(budget),
+    };
 
     Router::new()
         // VM management endpoints
@@ -50,6 +78,8 @@ pub fn create_router(config: Arc<Config>, host: &str, port: u16) -> Router {
         .route("/api/v1/images/push", post(push_image))
         .route("/api/v1/images/prune", post(prune_images))
         .route("/api/v1/images/run", post(run_from_image))
+        // Admission capacity (read-only)
+        .route("/api/v1/capacity", get(get_capacity))
         // Health check
         .route("/api/v1/health", get(health_check))
         // Swagger UI with dynamic OpenAPI spec
