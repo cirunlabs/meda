@@ -412,8 +412,8 @@ sudo bash -c '
     --console off \
     --serial tty \
     --kernel "{fw}" \
-    --cpus boot={cpus} \
-    --memory size={mem} \
+    --cpus {cpus} \
+    --memory {mem} \
     --disk path={vmdir}/rootfs.qcow2,image_type=qcow2,backing_files=on path="{vmdir}/ci.iso" \
     --net tap={tap},mac={mac} \
     --rng src=/dev/urandom{devsec} \
@@ -437,8 +437,8 @@ sudo chmod 0666 "{vmdir}/api.sock" 2>/dev/null || true
         netns = netns_spec.netns,
         ch = config.ch_bin.display(),
         fw = config.fw_bin.display(),
-        cpus = resources.cpus,
-        mem = resources.memory,
+        cpus = crate::util::cpus_flag_value(resources.cpus, !resources.devices.is_empty()),
+        mem = crate::util::memory_flag_value(&resources.memory, !resources.devices.is_empty()),
         tap = tap_name,
         mac = mac,
         devsec = device_section,
