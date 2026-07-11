@@ -1734,6 +1734,47 @@ async fn run_instant_core(
     }
 
     let slug = image_slug(&image_ref);
+
+    // VFIO passthrough devices cannot survive snapshot/restore: cloud-
+    // hypervisor fails to re-register the device BARs on restore
+    // ("bar 0 already used"). So a VM that requests devices skips the
+    // template/snapshot/clone fast path entirely and boots fresh from the
+    // image with the device attached. Slower first boot, but the only path
+    // that works for GPU passthrough.
+    if !options.resources.devices.is_empty() {
+        let instance = match options.vm_name {
+            Some(n) => n.to_string(),
+            None => format!(
+                "{}-{}",
+                slug,
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_millis()
+            ),
+        };
+        let user_data_path = write_default_fast_user_data(config)?;
+        let inst_opts = RunOptions {
+            vm_name: Some(&instance),
+            registry: options.registry,
+            org: options.org,
+            user_data_path: Some(user_data_path.to_str().unwrap()),
+            no_start: false,
+            resources: options.resources.clone(),
+        };
+        run_from_image(config, image, inst_opts, true).await?;
+        // Fresh-boot uses host-scoped tap networking, not the netns/veth
+        // path, so report the routable guest IP directly. The host tap is
+        // torn down by vm::delete -> cleanup_networking, same as any VM.
+        let host = crate::vm::get_routable_ip(config, &instance)?;
+        return Ok(serde_json::json!({
+            "vm": instance,
+            "ssh": format!("cirun@{host}"),
+            "host": host,
+            "port": 22,
+        }));
+    }
+
     let template_name = format!("__tpl_{}", slug);
     let template_dir = config.vm_dir(&template_name);
     let has_template = template_dir.join("snapshot").join("config.json").exists();
@@ -2076,17 +2117,7 @@ ethernets:
     crate::network::setup_networking(config, vm_name, &tap_name, &subnet).await?;
 
     // Build device passthrough flags
-    let device_section = if options.resources.devices.is_empty() {
-        String::new()
-    } else {
-        let args: Vec<String> = options
-            .resources
-            .devices
-            .iter()
-            .map(|d| format!("  --device path={}", d))
-            .collect();
-        format!(" \\\n{}", args.join(" \\\n"))
-    };
+    let device_section = crate::util::device_flags(&options.resources.devices);
 
     // Create start script
     let start_script = format!(
@@ -2097,8 +2128,8 @@ cd "{}"
   --console off \
   --serial tty \
   --kernel "{}" \
-  --cpus boot={} \
-  --memory size={} \
+  --cpus {} \
+  --memory {} \
   --disk path={}/rootfs.qcow2,image_type=qcow2,backing_files=on path="{}/ci.iso" \
   --net tap={},mac={} \
   --rng src=/dev/urandom{} \
@@ -2116,8 +2147,14 @@ fi
         config.ch_bin.display(),
         vm_dir.display(),
         config.fw_bin.display(),
-        options.resources.cpus,
-        options.resources.memory,
+        crate::util::cpus_flag_value(
+            options.resources.cpus,
+            !options.resources.devices.is_empty(),
+        ),
+        crate::util::memory_flag_value(
+            &options.resources.memory,
+            !options.resources.devices.is_empty(),
+        ),
         vm_dir.display(),
         vm_dir.display(),
         tap_name,

@@ -246,6 +246,82 @@ pub fn write_string_to_file(path: &Path, content: &str) -> Result<()> {
     fs::write(path, content).map_err(Error::Io)
 }
 
+/// Build the cloud-hypervisor `--memory` value for a VM.
+///
+/// VFIO device passthrough requires the guest RAM to be shared (mmap
+/// MAP_SHARED) so the IOMMU can DMA-map it; without `shared=on`,
+/// `VFIO_IOMMU_MAP_DMA` fails with EINVAL and the VM never boots. Plain VMs
+/// keep the default private mapping.
+pub fn memory_flag_value(size: &str, has_devices: bool) -> String {
+    if has_devices {
+        format!("size={size},shared=on")
+    } else {
+        format!("size={size}")
+    }
+}
+
+/// Default guest physical-address width to fall back to when the host IOMMU
+/// width cannot be read. 39 bits (512 GiB) is the common Intel client/
+/// workstation DMAR width and is ample for any CI guest.
+const DEFAULT_IOMMU_WIDTH: u8 = 39;
+
+/// Parse the host IOMMU (DMAR) address width from kernel-log text of the form
+/// `DMAR: Host address width 39`. Returns None if absent.
+pub fn parse_iommu_width(dmesg: &str) -> Option<u8> {
+    for line in dmesg.lines() {
+        if let Some(idx) = line.find("Host address width") {
+            let tail = &line[idx + "Host address width".len()..];
+            if let Some(tok) = tail.split_whitespace().next() {
+                if let Ok(w) = tok.trim().parse::<u8>() {
+                    return Some(w);
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Detect the host IOMMU address width (falls back to DEFAULT_IOMMU_WIDTH).
+///
+/// cloud-hypervisor sizes the guest's 64-bit MMIO aperture from the CPU's
+/// physical-address width, which on many hosts exceeds the IOMMU's addressable
+/// range. When a VFIO device's relocated BAR lands above that range, the DMA
+/// map of its MMIO region is rejected with EINVAL. Capping the guest phys
+/// width to the IOMMU width keeps the aperture mappable.
+pub fn detect_iommu_width() -> u8 {
+    if let Ok(out) = std::process::Command::new("dmesg").output() {
+        if let Some(w) = parse_iommu_width(&String::from_utf8_lossy(&out.stdout)) {
+            return w;
+        }
+    }
+    DEFAULT_IOMMU_WIDTH
+}
+
+/// Build the cloud-hypervisor `--cpus` value. With devices attached, the guest
+/// physical-address width is capped to the host IOMMU width so passthrough BAR
+/// MMIO stays within the IOMMU's mappable range.
+pub fn cpus_flag_value<T: std::fmt::Display>(boot: T, has_devices: bool) -> String {
+    if has_devices {
+        format!("boot={boot},max_phys_bits={}", detect_iommu_width())
+    } else {
+        format!("boot={boot}")
+    }
+}
+
+/// Build the cloud-hypervisor `--device path=...` VFIO passthrough section for
+/// a VM's devices, or an empty string when there are none. Shared by the VM
+/// and image start-script builders so the flag format lives in one place.
+pub fn device_flags(devices: &[String]) -> String {
+    if devices.is_empty() {
+        return String::new();
+    }
+    let args: Vec<String> = devices
+        .iter()
+        .map(|d| format!("  --device path={d}"))
+        .collect();
+    format!(" \\\n{}", args.join(" \\\n"))
+}
+
 /// Convert a duration to a human-readable format
 pub fn format_duration(duration: Duration) -> String {
     let secs = duration.as_secs();
@@ -301,6 +377,42 @@ mod tests {
     fn test_run_command_success() {
         let result = run_command("echo", &["hello"]);
         assert!(result.is_ok());
+    }
+
+    #[test]
+    fn memory_flag_adds_shared_only_with_devices() {
+        assert_eq!(memory_flag_value("8G", false), "size=8G");
+        assert_eq!(memory_flag_value("8G", true), "size=8G,shared=on");
+    }
+
+    #[test]
+    fn parses_iommu_width_from_dmesg() {
+        let d = "foo\n[ 0.5] DMAR: Host address width 39\nbar";
+        assert_eq!(parse_iommu_width(d), Some(39));
+        assert_eq!(parse_iommu_width("no dmar line here"), None);
+    }
+
+    #[test]
+    fn cpus_flag_caps_phys_bits_only_with_devices() {
+        assert_eq!(cpus_flag_value(4, false), "boot=4");
+        let with = cpus_flag_value(4, true);
+        assert!(with.starts_with("boot=4,max_phys_bits="), "got {with}");
+    }
+
+    #[test]
+    fn device_flags_empty_or_formatted() {
+        assert_eq!(device_flags(&[]), "");
+        let f = device_flags(&["/sys/bus/pci/devices/0000:01:00.0".to_string()]);
+        assert!(
+            f.contains("--device path=/sys/bus/pci/devices/0000:01:00.0"),
+            "{f}"
+        );
+        assert_eq!(
+            device_flags(&["/a".to_string(), "/b".to_string()])
+                .matches("--device path=")
+                .count(),
+            2
+        );
     }
 
     #[test]
