@@ -384,16 +384,7 @@ ethernets:
     crate::netns::create(&netns_spec, &subnet, &tap_name)?;
 
     // Build device passthrough flags
-    let device_section = if resources.devices.is_empty() {
-        String::new()
-    } else {
-        let args: Vec<String> = resources
-            .devices
-            .iter()
-            .map(|d| format!("  --device path={}", d))
-            .collect();
-        format!(" \\\n{}", args.join(" \\\n"))
-    };
+    let device_section = crate::util::device_flags(&resources.devices);
 
     // Start script. CH runs inside this VM's dedicated netns so the
     // tap device, iptables rules, and (via the veth pair) the guest

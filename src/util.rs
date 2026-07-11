@@ -308,6 +308,20 @@ pub fn cpus_flag_value<T: std::fmt::Display>(boot: T, has_devices: bool) -> Stri
     }
 }
 
+/// Build the cloud-hypervisor `--device path=...` VFIO passthrough section for
+/// a VM's devices, or an empty string when there are none. Shared by the VM
+/// and image start-script builders so the flag format lives in one place.
+pub fn device_flags(devices: &[String]) -> String {
+    if devices.is_empty() {
+        return String::new();
+    }
+    let args: Vec<String> = devices
+        .iter()
+        .map(|d| format!("  --device path={d}"))
+        .collect();
+    format!(" \\\n{}", args.join(" \\\n"))
+}
+
 /// Convert a duration to a human-readable format
 pub fn format_duration(duration: Duration) -> String {
     let secs = duration.as_secs();
@@ -383,6 +397,22 @@ mod tests {
         assert_eq!(cpus_flag_value(4, false), "boot=4");
         let with = cpus_flag_value(4, true);
         assert!(with.starts_with("boot=4,max_phys_bits="), "got {with}");
+    }
+
+    #[test]
+    fn device_flags_empty_or_formatted() {
+        assert_eq!(device_flags(&[]), "");
+        let f = device_flags(&["/sys/bus/pci/devices/0000:01:00.0".to_string()]);
+        assert!(
+            f.contains("--device path=/sys/bus/pci/devices/0000:01:00.0"),
+            "{f}"
+        );
+        assert_eq!(
+            device_flags(&["/a".to_string(), "/b".to_string()])
+                .matches("--device path=")
+                .count(),
+            2
+        );
     }
 
     #[test]

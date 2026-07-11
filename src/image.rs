@@ -2117,17 +2117,7 @@ ethernets:
     crate::network::setup_networking(config, vm_name, &tap_name, &subnet).await?;
 
     // Build device passthrough flags
-    let device_section = if options.resources.devices.is_empty() {
-        String::new()
-    } else {
-        let args: Vec<String> = options
-            .resources
-            .devices
-            .iter()
-            .map(|d| format!("  --device path={}", d))
-            .collect();
-        format!(" \\\n{}", args.join(" \\\n"))
-    };
+    let device_section = crate::util::device_flags(&options.resources.devices);
 
     // Create start script
     let start_script = format!(
