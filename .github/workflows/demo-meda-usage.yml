@@ -1,0 +1,166 @@
+name: Demo - Meda VM SSH System Info Collection
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+    branches: ["main"]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  demo-meda-ssh:
+    name: Demo Meda VM Management and SSH System Info
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-demo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-demo-
+            ${{ runner.os }}-cargo-
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y qemu-utils genisoimage iptables jq sshpass
+
+      - name: Give the runner user rw access to /dev/kvm
+        run: sudo setfacl -m u:${USER}:rw /dev/kvm
+
+      - name: Build meda
+        run: cargo build --release
+
+      - name: Create demo VM
+        run: |
+          echo "🔧 Creating demo VM..."
+          ./target/release/meda create demo-vm --json
+        timeout-minutes: 2
+
+      - name: Start demo VM
+        run: |
+          echo "🚀 Starting demo VM..."
+          ./target/release/meda start demo-vm --json
+        timeout-minutes: 3
+
+      - name: Wait for VM IP to be available
+        run: |
+          echo "⏳ Waiting for demo VM IP to be available..."
+          max_retries=30
+          delay=5
+          for i in $(seq 1 $max_retries); do
+            echo "Attempt $i/$max_retries to get VM IP..."
+            if vm_ip=$(./target/release/meda ip demo-vm --json 2>/dev/null | jq -r '.ip' 2>/dev/null); then
+              if [ "$vm_ip" != "null" ] && [ "$vm_ip" != "" ]; then
+                echo "✅ VM IP obtained: $vm_ip"
+                echo "VM_IP=$vm_ip" >> $GITHUB_ENV
+                break
+              fi
+            fi
+            if [ $i -eq $max_retries ]; then
+              echo "❌ Failed to get VM IP after $max_retries attempts"
+              exit 1
+            fi
+            echo "IP not ready yet, waiting ${delay}s..."
+            sleep $delay
+          done
+        timeout-minutes: 5
+
+      - name: Wait for SSH connectivity
+        run: |
+          echo "🔌 Waiting for SSH connectivity to $VM_IP..."
+          max_retries=20
+          delay=3
+          success=0
+          for i in $(seq 1 $max_retries); do
+            echo "SSH attempt $i/$max_retries to $VM_IP..."
+            if sshpass -p 'cirun' ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 -o UserKnownHostsFile=/dev/null cirun@$VM_IP "echo 'SSH test successful'" >/dev/null 2>&1; then
+              echo "✅ SSH connectivity established"
+              success=1
+              break
+            fi
+            if [ $i -eq $max_retries ]; then
+              echo "❌ SSH failed after $max_retries attempts"
+              exit 1
+            fi
+            echo "SSH not ready yet, waiting ${delay}s..."
+            sleep $delay
+          done
+        timeout-minutes: 5
+
+      - name: Collect system information via SSH
+        run: |
+          echo "📊 Collecting system information from VM at $VM_IP..."
+
+          # Function to execute SSH commands with error handling
+          ssh_execute() {
+            local cmd="$1"
+            local description="$2"
+            echo ""
+            echo "================================================"
+            echo "🔍 $description"
+            echo "================================================"
+            echo "Executing: $cmd"
+            echo "------------------------------------------------"
+            if sshpass -p 'cirun' ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 -o UserKnownHostsFile=/dev/null cirun@$VM_IP "$cmd"; then
+              echo "------------------------------------------------"
+              echo "✅ Command completed successfully"
+            else
+              echo "------------------------------------------------"
+              echo "⚠️ Command failed with exit code $?"
+            fi
+            echo "================================================"
+          }
+
+          # Collect the requested system information
+          ssh_execute "df -h" "Disk Usage Information"
+          ssh_execute "free -h" "Memory Usage Information"
+          ssh_execute "uname -a" "Operating System and Kernel Information"
+          ssh_execute "lscpu" "CPU Information"
+
+          echo ""
+          echo "🎉 System information collection completed!"
+        timeout-minutes: 3
+
+      - name: Cleanup - Stop and delete demo VM
+        if: always()
+        run: |
+          echo "🧹 Cleaning up demo VM..."
+          ./target/release/meda stop demo-vm --json || true
+          ./target/release/meda delete demo-vm --json || true
+          echo "✅ Cleanup completed"
+        timeout-minutes: 2
+
+      - name: Debug on failure
+        if: failure()
+        run: |
+          echo "🔍 Debug information on failure:"
+          echo "Current VMs:"
+          ./target/release/meda list --json || true
+          echo ""
+          echo "VM details:"
+          ./target/release/meda get demo-vm --json || true
+          echo ""
+          echo "Disk space:"
+          df -h
+          echo ""
+          echo "Memory usage:"
+          free -h
