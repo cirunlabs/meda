@@ -273,7 +273,7 @@ async fn run() -> Result<()> {
                     Ok(s) => std::process::exit(s.code().unwrap_or(1)),
                     Err(e) => return Err(error::Error::Other(format!("ssh failed: {e}"))),
                 }
-            } else if cold || no_start {
+            } else if image::use_cold_boot(cold, no_start) {
                 // --cold forces the legacy cold path; --no-start doesn't
                 // make sense with the template/clone/restore flow, so
                 // fall back to the legacy code there too.

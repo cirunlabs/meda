@@ -186,6 +186,9 @@ pub struct ImageRunRequest {
     /// VFIO device paths for PCI passthrough
     #[serde(default)]
     pub devices: Vec<String>,
+    /// Skip the snapshot/restore fast path and cold-boot the VM
+    #[serde(default)]
+    pub cold: bool,
 }
 
 /// Generic API error response
@@ -240,5 +243,23 @@ impl From<crate::image::ImageInfo> for ImageInfo {
             size: image_info.size,
             created: image_info.created,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn image_run_request_cold_defaults_to_false() {
+        let req: ImageRunRequest = serde_json::from_str(r#"{"image":"ubuntu:latest"}"#).unwrap();
+        assert!(!req.cold);
+    }
+
+    #[test]
+    fn image_run_request_accepts_cold() {
+        let req: ImageRunRequest =
+            serde_json::from_str(r#"{"image":"ubuntu:latest","cold":true}"#).unwrap();
+        assert!(req.cold);
     }
 }
