@@ -2138,7 +2138,7 @@ cd "{}"
   --kernel "{}" \
   --cpus {} \
   --memory {} \
-  --disk path={}/rootfs.qcow2,image_type=qcow2,backing_files=on path="{}/ci.iso" \
+  {} \
   --net tap={},mac={} \
   --rng src=/dev/urandom{} \
   > "{}/ch.log" 2>&1 &
@@ -2163,8 +2163,7 @@ fi
             &options.resources.memory,
             !options.resources.devices.is_empty(),
         ),
-        vm_dir.display(),
-        vm_dir.display(),
+        crate::util::disk_flags(&vm_dir),
         tap_name,
         mac,
         device_section,
