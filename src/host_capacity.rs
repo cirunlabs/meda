@@ -49,15 +49,13 @@ pub fn total_cpu() -> u32 {
 /// but we already have `nix` in the dep tree and `nix::sys::statvfs`
 /// gives the same numbers in a safer wrapper.
 pub fn total_disk_gb(vm_root: &Path) -> u64 {
-    // Ensure the path exists; statvfs requires an extant entry.
-    let probe = if vm_root.exists() {
-        vm_root.to_path_buf()
-    } else if let Some(parent) = vm_root.parent() {
-        parent.to_path_buf()
-    } else {
+    // statvfs requires an extant entry, and on a fresh install neither
+    // ~/.meda/vms nor ~/.meda exists yet: measure the closest ancestor that
+    // does, which is on the partition the VMs will be created on.
+    let Some(probe) = vm_root.ancestors().find(|p| p.exists()) else {
         return 0;
     };
-    match nix::sys::statvfs::statvfs(&probe) {
+    match nix::sys::statvfs::statvfs(probe) {
         Ok(st) => {
             // blocks × frsize → bytes. nix exposes these as
             // `fsblkcnt_t` / `fsfilcnt_t`, which is u32 on macOS dev
@@ -68,5 +66,20 @@ pub fn total_disk_gb(vm_root: &Path) -> u64 {
             total / (1024 * 1024 * 1024)
         }
         Err(_) => 0,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn total_disk_gb_measures_partition_before_meda_dirs_exist() {
+        // Fresh install: neither ~/.meda nor ~/.meda/vms exists yet.
+        let home = tempfile::tempdir().unwrap();
+        let vm_root = home.path().join(".meda").join("vms");
+
+        assert_eq!(total_disk_gb(&vm_root), total_disk_gb(home.path()));
+        assert!(total_disk_gb(&vm_root) > 0);
     }
 }
