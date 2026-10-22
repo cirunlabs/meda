@@ -254,9 +254,12 @@ Content-Type: application/json
   "no_start": false,
   "memory": "1G",
   "cpus": 2,
-  "disk": "15G"
+  "disk": "15G",
+  "cold": false
 }
 ```
+
+By default the VM is started from a cached snapshot (fast path). Set `"cold": true` to cold-boot it with cloud-init instead, e.g. when the guest needs nested virtualization, which does not survive snapshot/restore.
 
 ### Remove Image
 

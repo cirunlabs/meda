@@ -818,10 +818,9 @@ pub async fn run_from_image(
 
     // The CLI's `meda run` defaults to the snapshot/restore fast path
     // (~120ms return, ~1.3s sshd) and only falls back to cold-boot
-    // cloud-init when `--no-start` is passed (snapshot/restore implies
-    // running, so there's nothing to "not start"). Mirror that here so
-    // API consumers get the same speed without an extra endpoint.
-    let result = if request.no_start {
+    // cloud-init for `--cold` or `--no-start`. Mirror that here so API
+    // consumers get the same speed without an extra endpoint.
+    let result = if image::use_cold_boot(request.cold, request.no_start) {
         image::run_from_image(&state.config, &request.image, options, true)
             .await
             .map(|_| serde_json::Value::Null)

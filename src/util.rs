@@ -1,6 +1,6 @@
 use crate::error::{Error, Result};
 use indicatif::{ProgressBar, ProgressStyle};
-use log::debug;
+use log::{debug, info};
 use std::fs;
 use std::io::Write;
 use std::path::Path;
@@ -140,6 +140,41 @@ pub async fn download_file(url: &str, dest: &Path) -> Result<()> {
     }
 
     Ok(())
+}
+
+/// Install the executable at `url` to `dest` unless `dest` already holds the
+/// file with SHA-256 `sha256`; a binary with any other hash (e.g. one from an
+/// older pin) is replaced. The download lands in a sibling temp file and only
+/// replaces `dest` once its hash matches, so a wrong or tampered release
+/// never ends up where meda runs it.
+pub async fn ensure_pinned_binary(url: &str, sha256: &str, dest: &Path) -> Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    if file_sha256(dest).ok().as_deref() == Some(sha256) {
+        return Ok(());
+    }
+    info!("Installing {} from {}", dest.display(), url);
+    let tmp = dest.with_extension("download");
+    download_file(url, &tmp).await?;
+    let actual = file_sha256(&tmp)?;
+    if actual != sha256 {
+        fs::remove_file(&tmp).ok();
+        return Err(Error::DownloadFailed(
+            url.to_string(),
+            format!("sha256 mismatch: expected {sha256}, got {actual}"),
+        ));
+    }
+    let mut perms = fs::metadata(&tmp)?.permissions();
+    perms.set_mode(0o755);
+    fs::set_permissions(&tmp, perms)?;
+    fs::rename(&tmp, dest)?;
+    Ok(())
+}
+
+fn file_sha256(path: &Path) -> Result<String> {
+    use sha2::{Digest, Sha256};
+    let mut hasher = Sha256::new();
+    std::io::copy(&mut fs::File::open(path)?, &mut hasher)?;
+    Ok(format!("{:x}", hasher.finalize()))
 }
 
 pub fn check_dependency(program: &str) -> Result<()> {
@@ -308,6 +343,16 @@ pub fn cpus_flag_value<T: std::fmt::Display>(boot: T, has_devices: bool) -> Stri
     }
 }
 
+/// Build the cloud-hypervisor `--disk` flag for a VM's rootfs and cloud-init
+/// ISO. Every disk names its `image_type`: cloud-hypervisor v54+ refuses to
+/// start without it. Shared by the VM and image start-script builders.
+pub fn disk_flags(vm_dir: &Path) -> String {
+    let d = vm_dir.display();
+    format!(
+        "--disk path={d}/rootfs.qcow2,image_type=qcow2,backing_files=on path=\"{d}/ci.iso\",image_type=raw"
+    )
+}
+
 /// Build the cloud-hypervisor `--device path=...` VFIO passthrough section for
 /// a VM's devices, or an empty string when there are none. Shared by the VM
 /// and image start-script builders so the flag format lives in one place.
@@ -373,6 +418,95 @@ mod tests {
     use std::fs;
     use tempfile::NamedTempFile;
 
+    const BIN_BODY: &[u8] = b"pinned binary contents";
+    // sha256 of BIN_BODY
+    const BIN_SHA256: &str = "7a98613920ee544bb51251b9968cfd12ea5bf9cfde4d4da1a1543ea965e10245";
+
+    /// Serve `body` to a single HTTP request on 127.0.0.1; returns its URL.
+    async fn serve_once(body: &'static [u8]) -> String {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let (mut sock, _) = listener.accept().await.unwrap();
+            let mut req = [0u8; 1024];
+            let _ = sock.read(&mut req).await;
+            let head = format!(
+                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                body.len()
+            );
+            sock.write_all(head.as_bytes()).await.unwrap();
+            sock.write_all(body).await.unwrap();
+        });
+        format!("http://{addr}/bin")
+    }
+
+    #[tokio::test]
+    async fn ensure_pinned_binary_installs_matching_download() {
+        let dir = tempfile::tempdir().unwrap();
+        let dest = dir.path().join("cloud-hypervisor");
+        let url = serve_once(BIN_BODY).await;
+
+        ensure_pinned_binary(&url, BIN_SHA256, &dest).await.unwrap();
+
+        assert_eq!(fs::read(&dest).unwrap(), BIN_BODY);
+        use std::os::unix::fs::PermissionsExt;
+        assert_eq!(
+            fs::metadata(&dest).unwrap().permissions().mode() & 0o111,
+            0o111
+        );
+    }
+
+    #[tokio::test]
+    async fn ensure_pinned_binary_rejects_download_with_wrong_hash() {
+        let dir = tempfile::tempdir().unwrap();
+        let dest = dir.path().join("cloud-hypervisor");
+        let url = serve_once(b"tampered release").await;
+
+        let err = ensure_pinned_binary(&url, BIN_SHA256, &dest)
+            .await
+            .unwrap_err();
+
+        assert!(err.to_string().contains("sha256 mismatch"), "{err}");
+        assert!(!dest.exists());
+        assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 0);
+    }
+
+    /// A URL on a port nothing listens on, so any download attempt fails.
+    fn dead_url() -> String {
+        let port = std::net::TcpListener::bind("127.0.0.1:0")
+            .unwrap()
+            .local_addr()
+            .unwrap()
+            .port();
+        format!("http://127.0.0.1:{port}/bin")
+    }
+
+    #[tokio::test]
+    async fn ensure_pinned_binary_keeps_current_binary_without_downloading() {
+        let dir = tempfile::tempdir().unwrap();
+        let dest = dir.path().join("cloud-hypervisor");
+        fs::write(&dest, BIN_BODY).unwrap();
+
+        ensure_pinned_binary(&dead_url(), BIN_SHA256, &dest)
+            .await
+            .unwrap();
+
+        assert_eq!(fs::read(&dest).unwrap(), BIN_BODY);
+    }
+
+    #[tokio::test]
+    async fn ensure_pinned_binary_replaces_binary_from_another_pin() {
+        let dir = tempfile::tempdir().unwrap();
+        let dest = dir.path().join("cloud-hypervisor");
+        fs::write(&dest, b"previously pinned release").unwrap();
+        let url = serve_once(BIN_BODY).await;
+
+        ensure_pinned_binary(&url, BIN_SHA256, &dest).await.unwrap();
+
+        assert_eq!(fs::read(&dest).unwrap(), BIN_BODY);
+    }
+
     #[test]
     fn test_run_command_success() {
         let result = run_command("echo", &["hello"]);
@@ -397,6 +531,21 @@ mod tests {
         assert_eq!(cpus_flag_value(4, false), "boot=4");
         let with = cpus_flag_value(4, true);
         assert!(with.starts_with("boot=4,max_phys_bits="), "got {with}");
+    }
+
+    #[test]
+    fn disk_flags_declare_image_type_for_every_disk() {
+        let flags = disk_flags(Path::new("/vms/a"));
+        let disks: Vec<&str> = flags
+            .strip_prefix("--disk ")
+            .expect(&flags)
+            .split(' ')
+            .collect();
+        assert_eq!(disks.len(), 2, "{flags}");
+        assert!(disks[0].contains("/vms/a/rootfs.qcow2"), "{flags}");
+        assert!(disks[0].contains("image_type=qcow2"), "{flags}");
+        assert!(disks[1].contains("/vms/a/ci.iso"), "{flags}");
+        assert!(disks[1].contains("image_type=raw"), "{flags}");
     }
 
     #[test]

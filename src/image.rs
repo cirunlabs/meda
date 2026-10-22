@@ -20,6 +20,14 @@ pub struct RunOptions<'a> {
     pub resources: crate::vm::VmResources,
 }
 
+/// Whether `run` should take the legacy cold-boot path instead of the
+/// snapshot/restore fast path. `cold` is an explicit opt-out (restored
+/// snapshots break nested virtualization in the guest); `no_start` also
+/// implies cold because snapshot/restore always leaves the VM running.
+pub fn use_cold_boot(cold: bool, no_start: bool) -> bool {
+    cold || no_start
+}
+
 #[derive(Serialize)]
 pub struct ImageInfo {
     pub name: String,
@@ -2130,7 +2138,7 @@ cd "{}"
   --kernel "{}" \
   --cpus {} \
   --memory {} \
-  --disk path={}/rootfs.qcow2,image_type=qcow2,backing_files=on path="{}/ci.iso" \
+  {} \
   --net tap={},mac={} \
   --rng src=/dev/urandom{} \
   > "{}/ch.log" 2>&1 &
@@ -2155,8 +2163,7 @@ fi
             &options.resources.memory,
             !options.resources.devices.is_empty(),
         ),
-        vm_dir.display(),
-        vm_dir.display(),
+        crate::util::disk_flags(&vm_dir),
         tap_name,
         mac,
         device_section,
@@ -2218,6 +2225,14 @@ mod tests {
     use super::*;
     use std::env;
     use tempfile::TempDir;
+
+    #[test]
+    fn test_use_cold_boot() {
+        assert!(!use_cold_boot(false, false));
+        assert!(use_cold_boot(true, false));
+        assert!(use_cold_boot(false, true));
+        assert!(use_cold_boot(true, true));
+    }
 
     #[test]
     fn test_image_ref_parse_simple() {

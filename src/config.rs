@@ -3,15 +3,33 @@ use crate::error::{Error, Result};
 use std::env;
 use std::path::PathBuf;
 
+/// A release binary meda downloads, pinned to an exact version and SHA-256.
+pub struct PinnedBinary {
+    pub url: &'static str,
+    pub sha256: &'static str,
+}
+
+pub const FIRMWARE: PinnedBinary = PinnedBinary {
+    url: "https://github.com/cloud-hypervisor/rust-hypervisor-firmware/releases/download/0.5.0/hypervisor-fw",
+    sha256: "4a0a1e977368f6b15d2198a216bdedf9a350bf5e5ae07e29e695373ec16ad958",
+};
+
+pub const CLOUD_HYPERVISOR: PinnedBinary = PinnedBinary {
+    url: "https://github.com/cloud-hypervisor/cloud-hypervisor/releases/download/v51.2/cloud-hypervisor-static",
+    sha256: "74db277a5c6bce0631ea9dfc3c8edccd0a499627ebb204d97b66c6d39f0036fd",
+};
+
+pub const CH_REMOTE: PinnedBinary = PinnedBinary {
+    url: "https://github.com/cloud-hypervisor/cloud-hypervisor/releases/download/v51.2/ch-remote-static",
+    sha256: "bb714d67dbf14a9be1b602eebd5c368fc7cf985b908126dc1835c357426daeec",
+};
+
 #[derive(Clone)]
 pub struct Config {
     pub ch_home: PathBuf,
     pub asset_dir: PathBuf,
     pub vm_root: PathBuf,
     pub os_url: String,
-    pub fw_url: String,
-    pub ch_url: String,
-    pub cr_url: String,
     pub oras_url: String,
     pub base_raw: PathBuf,
     pub fw_bin: PathBuf,
@@ -41,9 +59,6 @@ impl Config {
             "https://cloud-images.ubuntu.com/jammy/current/jammy-server-cloudimg-amd64.img"
                 .to_string()
         });
-        let fw_url = "https://github.com/cloud-hypervisor/rust-hypervisor-firmware/releases/latest/download/hypervisor-fw".to_string();
-        let ch_url = "https://github.com/cloud-hypervisor/cloud-hypervisor/releases/latest/download/cloud-hypervisor-static".to_string();
-        let cr_url = "https://github.com/cloud-hypervisor/cloud-hypervisor/releases/latest/download/ch-remote-static".to_string();
         let oras_url = "https://github.com/oras-project/oras/releases/download/v1.2.3/oras_1.2.3_linux_amd64.tar.gz".to_string();
 
         let base_raw = asset_dir.join("ubuntu-base.raw");
@@ -86,9 +101,6 @@ impl Config {
             asset_dir,
             vm_root,
             os_url,
-            fw_url,
-            ch_url,
-            cr_url,
             oras_url,
             base_raw,
             fw_bin,

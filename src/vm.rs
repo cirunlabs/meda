@@ -86,6 +86,20 @@ pub struct VmDetailedInfo {
     pub details: Option<serde_json::Value>,
 }
 
+/// Install the firmware, cloud-hypervisor and ch-remote releases meda is
+/// pinned to, replacing any copy whose hash doesn't match the pin.
+async fn ensure_hypervisor_binaries(config: &Config) -> Result<()> {
+    use crate::config::{CH_REMOTE, CLOUD_HYPERVISOR, FIRMWARE};
+    for (pin, dest) in [
+        (&FIRMWARE, &config.fw_bin),
+        (&CLOUD_HYPERVISOR, &config.ch_bin),
+        (&CH_REMOTE, &config.cr_bin),
+    ] {
+        crate::util::ensure_pinned_binary(pin.url, pin.sha256, dest).await?;
+    }
+    Ok(())
+}
+
 pub async fn bootstrap(config: &Config) -> Result<()> {
     info!("Bootstrapping environment");
     info!("Ensuring directories exist");
@@ -120,38 +134,7 @@ pub async fn bootstrap(config: &Config) -> Result<()> {
         fs::remove_file(&tmp_file).ok();
     }
 
-    // Download firmware if needed
-    if !config.fw_bin.exists() {
-        info!("Downloading firmware");
-        download_file(&config.fw_url, &config.fw_bin).await?;
-
-        // Make firmware executable
-        let mut perms = fs::metadata(&config.fw_bin)?.permissions();
-        perms.set_mode(0o755);
-        fs::set_permissions(&config.fw_bin, perms)?;
-    }
-
-    // Download cloud-hypervisor if needed
-    if !config.ch_bin.exists() {
-        info!("Downloading cloud-hypervisor");
-        download_file(&config.ch_url, &config.ch_bin).await?;
-
-        // Make cloud-hypervisor executable
-        let mut perms = fs::metadata(&config.ch_bin)?.permissions();
-        perms.set_mode(0o755);
-        fs::set_permissions(&config.ch_bin, perms)?;
-    }
-
-    // Download ch-remote if needed
-    if !config.cr_bin.exists() {
-        info!("Downloading ch-remote");
-        download_file(&config.cr_url, &config.cr_bin).await?;
-
-        // Make ch-remote executable
-        let mut perms = fs::metadata(&config.cr_bin)?.permissions();
-        perms.set_mode(0o755);
-        fs::set_permissions(&config.cr_bin, perms)?;
-    }
+    ensure_hypervisor_binaries(config).await?;
 
     // Download ORAS if needed
     if !config.oras_bin.exists() {
@@ -178,38 +161,7 @@ pub async fn bootstrap_binaries_only(config: &Config) -> Result<()> {
     info!("Ensuring directories exist");
     config.ensure_dirs()?;
 
-    // Download firmware if needed
-    if !config.fw_bin.exists() {
-        info!("Downloading firmware");
-        download_file(&config.fw_url, &config.fw_bin).await?;
-
-        // Make firmware executable
-        let mut perms = fs::metadata(&config.fw_bin)?.permissions();
-        perms.set_mode(0o755);
-        fs::set_permissions(&config.fw_bin, perms)?;
-    }
-
-    // Download cloud-hypervisor if needed
-    if !config.ch_bin.exists() {
-        info!("Downloading cloud-hypervisor");
-        download_file(&config.ch_url, &config.ch_bin).await?;
-
-        // Make cloud-hypervisor executable
-        let mut perms = fs::metadata(&config.ch_bin)?.permissions();
-        perms.set_mode(0o755);
-        fs::set_permissions(&config.ch_bin, perms)?;
-    }
-
-    // Download ch-remote if needed
-    if !config.cr_bin.exists() {
-        info!("Downloading ch-remote");
-        download_file(&config.cr_url, &config.cr_bin).await?;
-
-        // Make ch-remote executable
-        let mut perms = fs::metadata(&config.cr_bin)?.permissions();
-        perms.set_mode(0o755);
-        fs::set_permissions(&config.cr_bin, perms)?;
-    }
+    ensure_hypervisor_binaries(config).await?;
 
     // Download ORAS if needed
     if !config.oras_bin.exists() {
@@ -405,7 +357,7 @@ sudo bash -c '
     --kernel "{fw}" \
     --cpus {cpus} \
     --memory {mem} \
-    --disk path={vmdir}/rootfs.qcow2,image_type=qcow2,backing_files=on path="{vmdir}/ci.iso" \
+    {disk} \
     --net tap={tap},mac={mac} \
     --rng src=/dev/urandom{devsec} \
     > "{vmdir}/ch.log" 2>&1 &
@@ -425,6 +377,7 @@ fi
 sudo chmod 0666 "{vmdir}/api.sock" 2>/dev/null || true
 "#,
         vmdir = vm_dir.display(),
+        disk = crate::util::disk_flags(&vm_dir),
         netns = netns_spec.netns,
         ch = config.ch_bin.display(),
         fw = config.fw_bin.display(),
