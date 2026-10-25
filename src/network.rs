@@ -163,31 +163,54 @@ pub async fn generate_unique_tap_name(_config: &Config, vm_name: &str) -> Result
     ))
 }
 
-/// Clean up orphaned TAP devices (TAP devices with no corresponding VM)
-pub async fn cleanup_orphaned_tap_devices(config: &Config) -> Result<Vec<String>> {
-    let mut cleaned_up = Vec::new();
-
-    // Get all TAP devices on the system
-    let mut system_taps = std::collections::HashSet::new();
-    if let Ok(output) = run_command_with_output("ip", &["link", "show"]) {
-        if output.status.success() {
-            let output_str = String::from_utf8_lossy(&output.stdout);
-            for line in output_str.lines() {
-                if line.contains("tap-") {
-                    if let Some(tap_start) = line.find("tap-") {
-                        let tap_part = &line[tap_start..];
-                        if let Some(colon_pos) = tap_part.find(':') {
-                            let tap_name = tap_part[..colon_pos].to_string();
-                            system_taps.insert(tap_name);
-                        }
+/// TAP devices in `ip link show` output that no VM in `vm_taps` references
+/// and that no process holds open. The kernel reports a TAP with an attached
+/// process as LOWER_UP; such a tap belongs to a running VM, possibly one from
+/// another meda instance (different HOME / MEDA_VM_DIR) that this vm_root
+/// can't see, so it is never an orphan.
+fn orphaned_taps(ip_link: &str, vm_taps: &HashSet<String>) -> Vec<String> {
+    let mut system_taps = HashSet::new();
+    for line in ip_link.lines() {
+        if line.contains("tap-") {
+            if let Some(tap_start) = line.find("tap-") {
+                let tap_part = &line[tap_start..];
+                if let Some(colon_pos) = tap_part.find(':') {
+                    let in_use = link_flags(tap_part).any(|f| f == "LOWER_UP");
+                    if !in_use {
+                        system_taps.insert(tap_part[..colon_pos].to_string());
                     }
                 }
             }
         }
     }
+    system_taps
+        .into_iter()
+        .filter(|tap| !vm_taps.contains(tap))
+        .collect()
+}
+
+/// The `<FLAG,FLAG,...>` list on an `ip link show` line.
+fn link_flags(line: &str) -> impl Iterator<Item = &str> {
+    let flags = line
+        .split_once('<')
+        .and_then(|(_, rest)| rest.split_once('>'))
+        .map_or("", |(flags, _)| flags);
+    flags.split(',').filter(|f| !f.is_empty())
+}
+
+/// Orphaned TAP devices on this host, without touching them. See
+/// [`orphaned_taps`] for what counts as an orphan.
+pub fn find_orphaned_tap_devices(config: &Config) -> Vec<String> {
+    // Get `ip link show` output for every device on the system
+    let ip_link = match run_command_with_output("ip", &["link", "show"]) {
+        Ok(output) if output.status.success() => {
+            String::from_utf8_lossy(&output.stdout).into_owned()
+        }
+        _ => String::new(),
+    };
 
     // Get all TAP devices referenced by VMs
-    let mut vm_taps = std::collections::HashSet::new();
+    let mut vm_taps = HashSet::new();
     if let Ok(entries) = fs::read_dir(&config.vm_root) {
         for entry in entries.flatten() {
             let path = entry.path();
@@ -200,13 +223,16 @@ pub async fn cleanup_orphaned_tap_devices(config: &Config) -> Result<Vec<String>
         }
     }
 
-    // Find orphaned TAP devices (exist on system but not referenced by any VM).
+    orphaned_taps(&ip_link, &vm_taps)
+}
+
+/// Clean up orphaned TAP devices (TAP devices with no corresponding VM)
+pub async fn cleanup_orphaned_tap_devices(config: &Config) -> Result<Vec<String>> {
+    let mut cleaned_up = Vec::new();
+
     // Flush the connected route first so a half-failed `ip link del` cannot
     // leave the `192.168.X.0/24` route hanging; then verify the tap is gone.
-    for tap_name in system_taps {
-        if vm_taps.contains(&tap_name) {
-            continue;
-        }
+    for tap_name in find_orphaned_tap_devices(config) {
         let _ = run_command_quietly("sudo", &["ip", "route", "flush", "dev", &tap_name]);
         if delete_tap_device_verified(&tap_name).is_ok() {
             cleaned_up.push(tap_name);
@@ -486,6 +512,42 @@ mod tests {
     use super::*;
     use std::env;
     use tempfile::TempDir;
+
+    /// `ip link show` output: one tap in use by a running VM (LOWER_UP),
+    /// one left behind by a VM that no longer exists (NO-CARRIER).
+    const IP_LINK: &str = "\
+1: lo: <LOOPBACK,UP,LOWER_UP> mtu 65536 qdisc noqueue state UNKNOWN mode DEFAULT group default qlen 1000
+    link/loopback 00:00:00:00:00:00 brd 00:00:00:00:00:00
+12: tap-2e5c0829: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 qdisc fq_codel state UP mode DEFAULT group default qlen 1000
+    link/ether 6a:1f:00:00:00:01 brd ff:ff:ff:ff:ff:ff
+13: tap-707e130b: <NO-CARRIER,BROADCAST,MULTICAST,UP> mtu 1500 qdisc fq_codel state DOWN mode DEFAULT group default qlen 1000
+    link/ether 6a:1f:00:00:00:02 brd ff:ff:ff:ff:ff:ff
+";
+
+    #[test]
+    fn orphaned_taps_spares_tap_in_use_by_a_vm_this_meda_does_not_own() {
+        // Another meda instance's running VM: not in our vm_root, but a
+        // process is attached. Deleting it kills that VM.
+        let orphans = orphaned_taps(IP_LINK, &HashSet::new());
+        assert!(
+            !orphans.contains(&"tap-2e5c0829".to_string()),
+            "{orphans:?}"
+        );
+    }
+
+    #[test]
+    fn orphaned_taps_reaps_detached_tap_with_no_vm() {
+        // A VM that died without cleanup: no process, no VM dir.
+        let orphans = orphaned_taps(IP_LINK, &HashSet::new());
+        assert_eq!(orphans, vec!["tap-707e130b".to_string()]);
+    }
+
+    #[test]
+    fn orphaned_taps_spares_detached_tap_of_own_vm() {
+        // One of this meda's stopped VMs: no process, but its dir names it.
+        let owned = HashSet::from(["tap-707e130b".to_string()]);
+        assert!(orphaned_taps(IP_LINK, &owned).is_empty());
+    }
 
     #[test]
     fn test_generate_random_mac() {

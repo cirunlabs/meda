@@ -313,7 +313,11 @@ async fn run() -> Result<()> {
             snapshot::clone_template(&config, &template, &new_name, cli.json).await?;
         }
         Commands::Cleanup { dry_run } => {
-            let cleaned_up = crate::network::cleanup_orphaned_tap_devices(&config).await?;
+            let cleaned_up = if dry_run {
+                crate::network::find_orphaned_tap_devices(&config)
+            } else {
+                crate::network::cleanup_orphaned_tap_devices(&config).await?
+            };
 
             if cleaned_up.is_empty() {
                 info!("No orphaned TAP devices found");
