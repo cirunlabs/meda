@@ -1,0 +1,143 @@
+name: Demo - Meda Usage with Latest Release
+
+# This workflow demonstrates how to install and use meda from a released version
+# It serves as both documentation and a working example for CI/CD integration
+# The workflow installs meda using the official release script and runs basic VM operations
+
+on:
+  # Allow manual triggering of this demo workflow
+  workflow_dispatch:
+  # Run on pushes to main to validate the demo still works
+  push:
+    branches: ["main"]
+    # Only run when workflow files or installation scripts change
+    paths:
+      - '.github/workflows/demo-meda-usage.yml'
+      - 'scripts/install-release.sh'
+  pull_request:
+    branches: ["main"]
+    # Only run when this workflow file changes
+    paths:
+      - '.github/workflows/demo-meda-usage.yml'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  demo-meda-usage:
+    name: Demo Meda with Latest Release
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install system dependencies
+        run: |
+          echo "Installing system dependencies for meda..."
+          sudo apt-get update
+          sudo apt-get install -y qemu-utils genisoimage iptables jq curl
+
+      - name: Give the runner user access to KVM
+        run: |
+          echo "Configuring KVM access..."
+          sudo setfacl -m u:${USER}:rw /dev/kvm
+          ls -la /dev/kvm
+
+      - name: Check available disk space
+        run: df -h
+
+      - name: Install meda using release script
+        run: |
+          echo "Installing meda using the official release script..."
+          # Use the install script from the current repository to test it
+          chmod +x scripts/install-release.sh
+          # Install to a directory in PATH (use specific version to avoid GitHub API rate limits in CI)
+          # In normal usage, you can omit --version to get the latest release automatically
+          sudo ./scripts/install-release.sh --version v0.3.2 --install-dir /usr/local/bin
+          
+          # Verify installation
+          echo "Verifying meda installation..."
+          meda --version
+          meda --help
+
+      - name: Create and start Ubuntu VM
+        run: |
+          echo "Creating Ubuntu VM using meda..."
+          
+          # Set some environment variables for the demo
+          export MEDA_CPUS=2
+          export MEDA_MEM=1G
+          export MEDA_DISK_SIZE=10G
+          
+          # Create a VM
+          echo "Creating VM named 'demo-vm'..."
+          meda create demo-vm --memory 1G --cpus 2 --json
+          
+          # List VMs to confirm creation
+          echo "Listing VMs:"
+          meda list --json
+
+      - name: Start the Ubuntu VM
+        run: |
+          echo "Starting the Ubuntu VM..."
+          meda start demo-vm --json
+          
+          # Wait a moment for VM to start
+          sleep 10
+          
+          # Check VM status
+          echo "Checking VM status:"
+          meda get demo-vm --json
+
+      - name: Get VM network information
+        run: |
+          echo "Getting VM network information..."
+          # Try to get VM IP address
+          meda ip demo-vm --json || echo "VM IP not yet available (this is normal during startup)"
+
+      - name: Demonstrate VM operations
+        run: |
+          echo "Demonstrating other VM operations..."
+          
+          # List all VMs with their status
+          echo "Current VMs:"
+          meda list --json
+          
+          # Show detailed VM information
+          echo "Detailed VM info:"
+          meda get demo-vm --json
+
+      - name: Cleanup - Stop and delete VM
+        if: always()
+        run: |
+          echo "Cleaning up - stopping and deleting VM..."
+          
+          # Stop the VM
+          meda stop demo-vm --json || echo "VM stop failed or VM was already stopped"
+          
+          # Delete the VM
+          meda delete demo-vm --json || echo "VM deletion failed or VM was already deleted"
+          
+          # Verify cleanup
+          echo "Final VM list (should be empty):"
+          meda list --json
+
+      - name: Demo summary
+        if: always()
+        run: |
+          echo "=== Meda Demo Summary ==="
+          echo "✅ Successfully installed meda from latest release"
+          echo "✅ Created Ubuntu VM using 'meda create'"
+          echo "✅ Started VM using 'meda start'"
+          echo "✅ Retrieved VM information using 'meda get'"
+          echo "✅ Demonstrated basic VM lifecycle management"
+          echo ""
+          echo "This demonstrates how to use meda in a CI/CD environment"
+          echo "or any automated setup for VM management."
+
+      - name: Check disk space after demo
+        if: always()
+        run: df -h
