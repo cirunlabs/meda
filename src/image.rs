@@ -1848,7 +1848,13 @@ fn template_name(image_ref: &ImageRef, resources: &crate::vm::VmResources) -> St
         resources.disk_size,
     )
     .chars()
-    .map(|c| if c.is_alphanumeric() || c == '_' { c } else { '_' })
+    .map(|c| {
+        if c.is_alphanumeric() || c == '_' {
+            c
+        } else {
+            '_'
+        }
+    })
     .collect()
 }
 
