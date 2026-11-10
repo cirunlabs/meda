@@ -1692,7 +1692,7 @@ pub async fn create_from_vm(
 /// a template snapshot on disk; every subsequent call for the same
 /// image clones the template and restores from it in ~1.5s.
 ///
-/// The template is a hidden VM dir `__tpl_<image_slug>` that the user
+/// The template is a hidden VM dir per image and VM size that the user
 /// never names. Multiple concurrent `meda run` for the same image each
 /// produce a unique clone — safe because each clone runs with smoltcp
 /// and its own host-side forward port.
@@ -1783,7 +1783,7 @@ async fn run_instant_core(
         }));
     }
 
-    let template_name = format!("__tpl_{}", slug);
+    let template_name = template_name(&image_ref, &options.resources);
     let template_dir = config.vm_dir(&template_name);
     let has_template = template_dir.join("snapshot").join("config.json").exists();
 
@@ -1836,6 +1836,22 @@ async fn run_instant_core(
 /// hidden template VM name). Collision on two refs that differ only
 /// in separators (e.g. `a:b` vs `a.b`) is accepted — callers should
 /// pass the canonical form produced by `meda pull`.
+/// Hidden template VM name for an image at one VM size. A restored clone
+/// keeps the template's CPUs, memory and disk, so each size needs its own
+/// template; sharing one would hand every clone the first caller's size.
+fn template_name(image_ref: &ImageRef, resources: &crate::vm::VmResources) -> String {
+    format!(
+        "__tpl_{}_{}c_{}_{}",
+        image_slug(image_ref),
+        resources.cpus,
+        resources.memory,
+        resources.disk_size,
+    )
+    .chars()
+    .map(|c| if c.is_alphanumeric() || c == '_' { c } else { '_' })
+    .collect()
+}
+
 fn image_slug(image_ref: &ImageRef) -> String {
     format!(
         "{}_{}_{}_{}",
@@ -2232,6 +2248,27 @@ mod tests {
         assert!(use_cold_boot(true, false));
         assert!(use_cold_boot(false, true));
         assert!(use_cold_boot(true, true));
+    }
+
+    fn resources(cpus: u8, memory: &str, disk_size: &str) -> crate::vm::VmResources {
+        crate::vm::VmResources {
+            memory: memory.to_string(),
+            cpus,
+            disk_size: disk_size.to_string(),
+            devices: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn test_template_name_is_per_vm_size() {
+        // Clones inherit the template's CPUs, memory and disk, so a run
+        // asking for a different size must not reuse another size's template.
+        let image_ref = ImageRef::parse("ubuntu", "ghcr.io", "cirunlabs").unwrap();
+        let small = template_name(&image_ref, &resources(2, "1G", "10G"));
+        assert_eq!(small, template_name(&image_ref, &resources(2, "1G", "10G")));
+        assert_ne!(small, template_name(&image_ref, &resources(4, "1G", "10G")));
+        assert_ne!(small, template_name(&image_ref, &resources(2, "8G", "10G")));
+        assert_ne!(small, template_name(&image_ref, &resources(2, "1G", "20G")));
     }
 
     #[test]
