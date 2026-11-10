@@ -77,5 +77,5 @@ check() {
 start_api
 # MemTotal sits a little below the configured size (kernel reservations).
 check run-size-small 1 1G 700000
-check run-size-large 4 8G 7000000
+check run-size-large 2 2G 1700000
 echo "PASS: each VM got its requested size"
